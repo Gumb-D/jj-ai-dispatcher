@@ -102,3 +102,5 @@ v0.2-worker-usability:
 - documentation polish only
 
 Test note: README append check.
+
+Phase 2A.1 validation note: dispatcher README append path verified.
