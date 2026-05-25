@@ -44,7 +44,10 @@ Use codex-task.repo.txt when the target repo is not config.defaultRepo.
 
 - `dispatcher/inbox/codex-task.txt` = prompt sent to Codex
 - `dispatcher/inbox/codex-task.repo.txt` = optional target repo override
+- `dispatcher/inbox/codex-task.commit.txt` = optional commit message
 - If no repo override is provided, `codex_task` uses `defaultRepo` from config
+- If Codex exits successfully and changes are detected, the dispatcher stages and commits them
+- If no commit message file is provided, the dispatcher uses `chore: codex task update`
 
 ## Configuration
 

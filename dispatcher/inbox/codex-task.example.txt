@@ -8,3 +8,7 @@ Constraints:
 Optional target repo override:
 - Create dispatcher/inbox/codex-task.repo.txt with one repo path.
 - Leave it absent or empty to use config.defaultRepo.
+
+Optional commit message:
+- Create dispatcher/inbox/codex-task.commit.txt with one commit message.
+- Leave it absent to use: chore: codex task update.

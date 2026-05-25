@@ -5,5 +5,6 @@ dispatcher/logs/*.stderr.tmp
 dispatcher/config.local.json
 dispatcher/inbox/codex-task.txt
 dispatcher/inbox/codex-task.repo.txt
+dispatcher/inbox/codex-task.commit.txt
 
 .vscode/

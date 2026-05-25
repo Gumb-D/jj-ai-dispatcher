@@ -88,6 +88,99 @@ function New-FailedResult {
     }
 }
 
+function Join-ResultText {
+    param(
+        [string]$Existing,
+        [string]$Addition
+    )
+
+    if ([string]::IsNullOrWhiteSpace($Addition)) {
+        return $Existing
+    }
+
+    if ([string]::IsNullOrWhiteSpace($Existing)) {
+        return $Addition
+    }
+
+    return ($Existing.TrimEnd() + [Environment]::NewLine + $Addition)
+}
+
+function Add-ResultOutput {
+    param(
+        [hashtable]$Result,
+        [string]$Stdout = "",
+        [string]$Stderr = ""
+    )
+
+    $Result.Stdout = Join-ResultText -Existing $Result.Stdout -Addition $Stdout
+    $Result.Stderr = Join-ResultText -Existing $Result.Stderr -Addition $Stderr
+}
+
+function Invoke-CodexTaskGitCommit {
+    param(
+        [hashtable]$Result,
+        [string]$RepoPath,
+        [pscustomobject]$Config,
+        [string]$LogFile,
+        [string]$DispatcherRoot
+    )
+
+    Write-Step "Git status check..."
+    Add-ResultOutput -Result $Result -Stdout "[dispatcher] Git status check..."
+
+    $statusResult = Invoke-LoggedCommand -FilePath $Config.gitExe -ArgumentList @("status", "--short") -WorkingDirectory $RepoPath -LogFile $LogFile
+    Add-ResultOutput -Result $Result -Stdout $statusResult.Stdout -Stderr $statusResult.Stderr
+    if ($statusResult.ExitCode -ne 0) {
+        $Result.ExitCode = $statusResult.ExitCode
+        Add-ResultOutput -Result $Result -Stdout "[dispatcher] Git status failed."
+        Add-ResultOutput -Result $Result -Stdout $statusResult.Stderr
+        return
+    }
+
+    if ([string]::IsNullOrWhiteSpace($statusResult.Stdout)) {
+        Write-Step "No changes detected."
+        Add-ResultOutput -Result $Result -Stdout "[dispatcher] No changes detected."
+        return
+    }
+
+    $commitMessagePath = Join-Path $DispatcherRoot "inbox\codex-task.commit.txt"
+    $commitMessage = "chore: codex task update"
+    if (Test-Path -LiteralPath $commitMessagePath -PathType Leaf) {
+        $commitMessage = (Get-Content -LiteralPath $commitMessagePath -Raw).Trim()
+        if ([string]::IsNullOrWhiteSpace($commitMessage)) {
+            $Result.ExitCode = 1
+            $message = "Custom Codex task commit message file is empty: $commitMessagePath."
+            Add-ResultOutput -Result $Result -Stdout "[dispatcher] $message" -Stderr $message
+            return
+        }
+    }
+
+    Write-Step "Auto commit message: $commitMessage"
+    Add-ResultOutput -Result $Result -Stdout "[dispatcher] Auto commit message: $commitMessage"
+
+    $addResult = Invoke-LoggedCommand -FilePath $Config.gitExe -ArgumentList @("add", "-A") -WorkingDirectory $RepoPath -LogFile $LogFile
+    Add-ResultOutput -Result $Result -Stdout $addResult.Stdout -Stderr $addResult.Stderr
+    if ($addResult.ExitCode -ne 0) {
+        $Result.ExitCode = $addResult.ExitCode
+        Add-ResultOutput -Result $Result -Stdout "[dispatcher] Git add failed."
+        Add-ResultOutput -Result $Result -Stdout $addResult.Stderr
+        return
+    }
+
+    $quotedCommitMessage = '"' + $commitMessage.Replace('"', '\"') + '"'
+    $commitResult = Invoke-LoggedCommand -FilePath $Config.gitExe -ArgumentList @("commit", "-m", $quotedCommitMessage) -WorkingDirectory $RepoPath -LogFile $LogFile
+    Add-ResultOutput -Result $Result -Stdout $commitResult.Stdout -Stderr $commitResult.Stderr
+    if ($commitResult.ExitCode -ne 0) {
+        $Result.ExitCode = $commitResult.ExitCode
+        Add-ResultOutput -Result $Result -Stdout "[dispatcher] Git commit failed."
+        Add-ResultOutput -Result $Result -Stdout $commitResult.Stderr
+        return
+    }
+
+    Write-Step "Git commit complete."
+    Add-ResultOutput -Result $Result -Stdout "[dispatcher] Git commit complete."
+}
+
 $projectRoot = Split-Path $PSScriptRoot -Parent
 $configPath = Join-Path $PSScriptRoot "config.json"
 $localConfigPath = Join-Path $PSScriptRoot "config.local.json"
@@ -218,6 +311,9 @@ exit `$LASTEXITCODE
 "@
         $encodedRunner = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($runner))
         $result = Invoke-LoggedCommand -FilePath "pwsh" -ArgumentList @("-NoProfile", "-ExecutionPolicy", "Bypass", "-EncodedCommand", $encodedRunner) -WorkingDirectory $projectRoot -LogFile $logFile
+        if ($result.ExitCode -eq 0) {
+            Invoke-CodexTaskGitCommit -Result $result -RepoPath $repoPath -Config $config -LogFile $logFile -DispatcherRoot $PSScriptRoot
+        }
     }
 
     "openclaw" {
@@ -263,7 +359,10 @@ if ($VerboseLog) {
 }
 else {
     $summaryText = $result.Stdout
-    if ([string]::IsNullOrWhiteSpace($summaryText)) {
+    if ($result.ExitCode -ne 0 -and -not [string]::IsNullOrWhiteSpace($result.Stderr)) {
+        $summaryText = Join-ResultText -Existing $summaryText -Addition $result.Stderr
+    }
+    elseif ([string]::IsNullOrWhiteSpace($summaryText)) {
         $summaryText = $result.Stderr
     }
 
