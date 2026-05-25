@@ -1,0 +1,191 @@
+param(
+    [Parameter(Mandatory = $true, Position = 0)]
+    [string]$TaskName,
+
+    [Parameter(Mandatory = $false)]
+    [string]$Repo,
+
+    [Parameter(Mandatory = $false)]
+    [switch]$VerboseLog
+)
+
+$ErrorActionPreference = "Stop"
+
+function Write-Step {
+    param([string]$Message)
+    Write-Host "[dispatcher] $Message"
+}
+
+function New-LogFile {
+    param([string]$TaskName)
+
+    $logDir = Join-Path $PSScriptRoot "logs"
+    if (-not (Test-Path $logDir)) {
+        New-Item -ItemType Directory -Path $logDir | Out-Null
+    }
+
+    $timestamp = Get-Date -Format "yyyyMMdd-HHmmss"
+    return Join-Path $logDir "$timestamp-$TaskName.log"
+}
+
+function Invoke-LoggedCommand {
+    param(
+        [string]$FilePath,
+        [string[]]$ArgumentList,
+        [string]$WorkingDirectory,
+        [string]$LogFile
+    )
+
+    $stdoutFile = "$LogFile.stdout.tmp"
+    $stderrFile = "$LogFile.stderr.tmp"
+
+    try {
+        $process = Start-Process `
+            -FilePath $FilePath `
+            -ArgumentList $ArgumentList `
+            -WorkingDirectory $WorkingDirectory `
+            -NoNewWindow `
+            -Wait `
+            -PassThru `
+            -RedirectStandardOutput $stdoutFile `
+            -RedirectStandardError $stderrFile
+
+        $stdout = if (Test-Path $stdoutFile) { Get-Content $stdoutFile -Raw } else { "" }
+        $stderr = if (Test-Path $stderrFile) { Get-Content $stderrFile -Raw } else { "" }
+
+        Add-Content -Path $LogFile -Value "COMMAND:"
+        Add-Content -Path $LogFile -Value "$FilePath $($ArgumentList -join ' ')"
+        Add-Content -Path $LogFile -Value ""
+        Add-Content -Path $LogFile -Value "WORKING DIRECTORY:"
+        Add-Content -Path $LogFile -Value $WorkingDirectory
+        Add-Content -Path $LogFile -Value ""
+        Add-Content -Path $LogFile -Value "STDOUT:"
+        Add-Content -Path $LogFile -Value $stdout
+        Add-Content -Path $LogFile -Value ""
+        Add-Content -Path $LogFile -Value "STDERR:"
+        Add-Content -Path $LogFile -Value $stderr
+        Add-Content -Path $LogFile -Value ""
+        Add-Content -Path $LogFile -Value "EXIT CODE: $($process.ExitCode)"
+
+        return @{
+            ExitCode = $process.ExitCode
+            Stdout = $stdout
+            Stderr = $stderr
+        }
+    }
+    finally {
+        Remove-Item $stdoutFile, $stderrFile -ErrorAction SilentlyContinue
+    }
+}
+
+$projectRoot = Split-Path $PSScriptRoot -Parent
+$configPath = Join-Path $PSScriptRoot "config.json"
+$tasksPath = Join-Path $PSScriptRoot "tasks.json"
+
+if (-not (Test-Path $configPath)) {
+    throw "Missing config file: $configPath"
+}
+
+if (-not (Test-Path $tasksPath)) {
+    throw "Missing tasks file: $tasksPath"
+}
+
+$config = Get-Content $configPath -Raw | ConvertFrom-Json
+$tasks = Get-Content $tasksPath -Raw | ConvertFrom-Json
+
+if (-not $tasks.PSObject.Properties.Name.Contains($TaskName)) {
+    $available = ($tasks.PSObject.Properties.Name -join ", ")
+    throw "Unknown task '$TaskName'. Available tasks: $available"
+}
+
+$task = $tasks.$TaskName
+$repoPath = if ($Repo) { $Repo } else { $config.defaultRepo }
+
+$logFile = New-LogFile -TaskName $TaskName
+
+Add-Content -Path $logFile -Value "JJ AI Dispatcher Log"
+Add-Content -Path $logFile -Value "Timestamp: $(Get-Date -Format o)"
+Add-Content -Path $logFile -Value "Task: $TaskName"
+Add-Content -Path $logFile -Value "Worker: $($task.worker)"
+Add-Content -Path $logFile -Value "Description: $($task.description)"
+Add-Content -Path $logFile -Value "Repo: $repoPath"
+Add-Content -Path $logFile -Value ""
+
+Write-Step "Task: $TaskName"
+Write-Step "Worker: $($task.worker)"
+Write-Step "Repo: $repoPath"
+Write-Step "Log: $logFile"
+
+$result = $null
+
+switch ($task.worker) {
+    "codex" {
+        $scriptPath = Join-Path $projectRoot "scripts\run-codex-task.ps1"
+        $args = @(
+            "-PromptFile", $task.command,
+            "-Repo", "`"$repoPath`""
+        )
+        $pwshArgs = @("-NoProfile", "-ExecutionPolicy", "Bypass", "-File", "`"$scriptPath`"") + $args
+        $result = Invoke-LoggedCommand -FilePath "pwsh" -ArgumentList $pwshArgs -WorkingDirectory $projectRoot -LogFile $logFile
+    }
+
+    "openclaw" {
+        $scriptPath = Join-Path $projectRoot "scripts\run-openclaw-task.ps1"
+        $args = @(
+            "-Action", $task.command
+        )
+        $pwshArgs = @("-NoProfile", "-ExecutionPolicy", "Bypass", "-File", "`"$scriptPath`"") + $args
+        $result = Invoke-LoggedCommand -FilePath "pwsh" -ArgumentList $pwshArgs -WorkingDirectory $projectRoot -LogFile $logFile
+    }
+
+    "git" {
+        if (-not (Test-Path $repoPath)) {
+            throw "Repo path not found: $repoPath"
+        }
+
+        $gitArgs = $task.command -split " "
+        $result = Invoke-LoggedCommand -FilePath $config.gitExe -ArgumentList $gitArgs -WorkingDirectory $repoPath -LogFile $logFile
+    }
+
+    "powershell" {
+        $result = Invoke-LoggedCommand -FilePath "pwsh" -ArgumentList @("-NoProfile", "-Command", $task.command) -WorkingDirectory $projectRoot -LogFile $logFile
+    }
+
+    default {
+        throw "Unsupported worker: $($task.worker)"
+    }
+}
+
+Write-Host ""
+Write-Host "===== JJ AI Dispatcher Summary ====="
+Write-Host "Task      : $TaskName"
+Write-Host "Worker    : $($task.worker)"
+Write-Host "Exit Code : $($result.ExitCode)"
+Write-Host "Log File  : $logFile"
+Write-Host ""
+
+if ($VerboseLog) {
+    Write-Host "----- STDOUT -----"
+    Write-Host $result.Stdout
+    Write-Host "----- STDERR -----"
+    Write-Host $result.Stderr
+}
+else {
+    $summaryText = $result.Stdout
+    if ([string]::IsNullOrWhiteSpace($summaryText)) {
+        $summaryText = $result.Stderr
+    }
+
+    if (-not [string]::IsNullOrWhiteSpace($summaryText)) {
+        $lines = $summaryText -split "`r?`n"
+        $preview = $lines | Select-Object -First 40
+        Write-Host ($preview -join [Environment]::NewLine)
+
+        if ($lines.Count -gt 40) {
+            Write-Host ""
+            Write-Host "...output truncated. Use -VerboseLog or open the log file for full details."
+        }
+    }
+}
+
+exit $result.ExitCode

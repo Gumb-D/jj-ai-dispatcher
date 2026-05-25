@@ -1,0 +1,50 @@
+{
+  "safe_commit": {
+    "name": "safe_commit",
+    "worker": "codex",
+    "command": "codex-safe-commit.md",
+    "description": "Ask Codex to inspect repo changes and prepare a safe commit plan without pushing."
+  },
+  "secure_scan": {
+    "name": "secure_scan",
+    "worker": "codex",
+    "command": "codex-secure-scan.md",
+    "description": "Ask Codex to scan the repo for secrets, unsafe files, and risky changes."
+  },
+  "git_status": {
+    "name": "git_status",
+    "worker": "git",
+    "command": "status --short --branch",
+    "description": "Show concise Git branch and working tree status."
+  },
+  "openclaw_restart": {
+    "name": "openclaw_restart",
+    "worker": "openclaw",
+    "command": "restart",
+    "description": "Restart OpenClaw gateway/runtime using configured OpenClaw command."
+  },
+  "openclaw_logs": {
+    "name": "openclaw_logs",
+    "worker": "openclaw",
+    "command": "logs",
+    "description": "Read OpenClaw logs."
+  },
+  "health_check": {
+    "name": "health_check",
+    "worker": "openclaw",
+    "command": "health",
+    "description": "Run OpenClaw health checks."
+  },
+  "repo_cleanup": {
+    "name": "repo_cleanup",
+    "worker": "codex",
+    "command": "repo-cleanup.md",
+    "description": "Ask Codex to inspect repo cleanliness and propose cleanup without deleting files."
+  },
+  "deployment_check": {
+    "name": "deployment_check",
+    "worker": "codex",
+    "command": "deployment-check.md",
+    "description": "Ask Codex to inspect deployment readiness without modifying system settings."
+  }
+}

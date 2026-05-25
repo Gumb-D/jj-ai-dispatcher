@@ -1,0 +1,12 @@
+{
+  "defaultRepo": "D:\\Users\\10265696\\Documents\\AI Transformation\\Skill\\create-pr-cd",
+  "codexExe": "codex",
+  "openclawExe": "openclaw",
+  "gitExe": "git",
+  "logRetentionDays": 30,
+  "safety": {
+    "allowAutoPush": false,
+    "allowAutoDelete": false,
+    "allowSystemSettingModification": false
+  }
+}
