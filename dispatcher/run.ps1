@@ -28,6 +28,216 @@ function New-LogFile {
     return Join-Path $logDir "$timestamp-$TaskName.log"
 }
 
+function New-TaskId {
+    $timestamp = Get-Date -Format "yyyyMMdd-HHmmss"
+    $suffix = [guid]::NewGuid().ToString("N").Substring(0, 8)
+    return "$timestamp-$suffix"
+}
+
+function New-RunContext {
+    param([string]$TaskId)
+
+    $runsDir = Join-Path $PSScriptRoot "runs"
+    $runDir = Join-Path $runsDir $TaskId
+    New-Item -ItemType Directory -Path $runDir -Force | Out-Null
+
+    return [pscustomobject]@{
+        TaskId = $TaskId
+        RunDir = $runDir
+        TaskJson = Join-Path $runDir "task.json"
+        ResultJson = Join-Path $runDir "result.json"
+        SummaryMd = Join-Path $runDir "summary.md"
+        StdoutLog = Join-Path $runDir "codex-output.log"
+        StderrLog = Join-Path $runDir "codex-error.log"
+        DiffPatch = Join-Path $runDir "git-diff.patch"
+    }
+}
+
+function ConvertTo-DispatcherRelativePath {
+    param([string]$Path)
+
+    $relative = [System.IO.Path]::GetRelativePath($projectRoot, $Path)
+    return $relative.Replace("\", "/")
+}
+
+function Write-JsonFile {
+    param(
+        [string]$Path,
+        [object]$Value
+    )
+
+    $Value | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath $Path -Encoding UTF8 -NoNewline
+}
+
+function Get-CodexTaskPrompt {
+    $promptPath = Join-Path $PSScriptRoot "inbox\codex-task.txt"
+    if (-not (Test-Path -LiteralPath $promptPath -PathType Leaf)) {
+        return ""
+    }
+
+    return (Get-Content -LiteralPath $promptPath -Raw).Trim()
+}
+
+function Get-CodexTaskCommitMessage {
+    param([string]$DispatcherRoot)
+
+    $commitMessagePath = Join-Path $DispatcherRoot "inbox\codex-task.commit.txt"
+    if (Test-Path -LiteralPath $commitMessagePath -PathType Leaf) {
+        return (Get-Content -LiteralPath $commitMessagePath -Raw).Trim()
+    }
+
+    return "chore: codex task update"
+}
+
+function Get-GitStatusFiles {
+    param([string]$StatusText)
+
+    if ([string]::IsNullOrWhiteSpace($StatusText)) {
+        return @()
+    }
+
+    $files = New-Object System.Collections.Generic.List[string]
+    foreach ($line in ($StatusText -split "`r?`n")) {
+        if ([string]::IsNullOrWhiteSpace($line) -or $line.Length -lt 4) {
+            continue
+        }
+
+        $path = $line.Substring(3).Trim()
+        if ($path -match " -> ") {
+            $path = ($path -split " -> ")[-1].Trim()
+        }
+
+        if (-not [string]::IsNullOrWhiteSpace($path)) {
+            $files.Add($path)
+        }
+    }
+
+    return @($files | Select-Object -Unique)
+}
+
+function Normalize-WorkerResult {
+    param(
+        [hashtable]$Result,
+        [string]$TaskId,
+        [string]$RepoPath,
+        [string]$Worker,
+        [string]$CommitMessage,
+        [string]$StdoutPath,
+        [string]$StderrPath,
+        [string]$DiffPath
+    )
+
+    $status = if ($Result.ExitCode -eq 0) { "success" } else { "failed" }
+    $summary = if ($status -eq "success") { "Codex worker completed successfully." } else { "Codex worker failed." }
+
+    return [pscustomobject][ordered]@{
+        taskId = $TaskId
+        status = $status
+        repo = $RepoPath
+        worker = $Worker
+        filesChanged = @()
+        commit = $null
+        commitMessage = $CommitMessage
+        pushed = $false
+        workingTreeClean = $false
+        summary = $summary
+        logs = [pscustomobject][ordered]@{
+            stdout = ConvertTo-DispatcherRelativePath -Path $StdoutPath
+            stderr = ConvertTo-DispatcherRelativePath -Path $StderrPath
+            diff = ConvertTo-DispatcherRelativePath -Path $DiffPath
+        }
+        needsReview = ($status -ne "success")
+        reviewHints = @()
+    }
+}
+
+function Get-GitHeadCommit {
+    param(
+        [string]$RepoPath,
+        [pscustomobject]$Config,
+        [string]$LogFile
+    )
+
+    $headResult = Invoke-LoggedCommand -FilePath $Config.gitExe -ArgumentList @("rev-parse", "--short", "HEAD") -WorkingDirectory $RepoPath -LogFile $LogFile
+    if ($headResult.ExitCode -ne 0) {
+        return $null
+    }
+
+    return $headResult.Stdout.Trim()
+}
+
+function Write-RunSummary {
+    param(
+        [pscustomobject]$RunContext,
+        [object]$ResultContract,
+        [string]$TaskText
+    )
+
+    $files = if ($ResultContract.filesChanged.Count -gt 0) {
+        ($ResultContract.filesChanged | ForEach-Object { "- $_" }) -join [Environment]::NewLine
+    }
+    else {
+        "- None"
+    }
+
+    $commit = if ([string]::IsNullOrWhiteSpace($ResultContract.commit)) {
+        "None"
+    }
+    else {
+        "$($ResultContract.commit) $($ResultContract.commitMessage)"
+    }
+
+    $validation = if ($ResultContract.workingTreeClean) {
+        "- git status --short clean"
+    }
+    else {
+        "- git status --short not clean or unavailable"
+    }
+
+    $reviewHints = if ($ResultContract.reviewHints.Count -gt 0) {
+        ($ResultContract.reviewHints | ForEach-Object { "- $_" }) -join [Environment]::NewLine
+    }
+    else {
+        "- No review hints recorded."
+    }
+
+    $content = @"
+# Dispatcher Run Summary
+
+Task ID: $($ResultContract.taskId)
+Status: $($ResultContract.status)
+Repo: $($ResultContract.repo)
+Worker: $($ResultContract.worker)
+
+## Task
+
+$TaskText
+
+## Files Changed
+
+$files
+
+## Commit
+
+$commit
+
+## Validation
+
+$validation
+
+## Notes
+
+Summary: $($ResultContract.summary)
+Needs review: $($ResultContract.needsReview)
+
+## Review Hints
+
+$reviewHints
+"@
+
+    Set-Content -LiteralPath $RunContext.SummaryMd -Value $content -Encoding UTF8 -NoNewline
+}
+
 function Invoke-LoggedCommand {
     param(
         [string]$FilePath,
@@ -119,10 +329,12 @@ function Add-ResultOutput {
 function Invoke-CodexTaskGitCommit {
     param(
         [hashtable]$Result,
+        [object]$ResultContract,
         [string]$RepoPath,
         [pscustomobject]$Config,
         [string]$LogFile,
-        [string]$DispatcherRoot
+        [string]$DispatcherRoot,
+        [string]$DiffPatch
     )
 
     Write-Step "Git status check..."
@@ -132,6 +344,9 @@ function Invoke-CodexTaskGitCommit {
     Add-ResultOutput -Result $Result -Stdout $statusResult.Stdout -Stderr $statusResult.Stderr
     if ($statusResult.ExitCode -ne 0) {
         $Result.ExitCode = $statusResult.ExitCode
+        $ResultContract.status = "failed"
+        $ResultContract.needsReview = $true
+        $ResultContract.reviewHints = @("Git status failed.")
         Add-ResultOutput -Result $Result -Stdout "[dispatcher] Git status failed."
         Add-ResultOutput -Result $Result -Stdout $statusResult.Stderr
         return
@@ -140,19 +355,23 @@ function Invoke-CodexTaskGitCommit {
     if ([string]::IsNullOrWhiteSpace($statusResult.Stdout)) {
         Write-Step "No changes detected."
         Add-ResultOutput -Result $Result -Stdout "[dispatcher] No changes detected."
+        $ResultContract.workingTreeClean = $true
+        $ResultContract.summary = "Codex worker completed successfully. No changes detected."
         return
     }
 
-    $commitMessagePath = Join-Path $DispatcherRoot "inbox\codex-task.commit.txt"
-    $commitMessage = "chore: codex task update"
-    if (Test-Path -LiteralPath $commitMessagePath -PathType Leaf) {
-        $commitMessage = (Get-Content -LiteralPath $commitMessagePath -Raw).Trim()
-        if ([string]::IsNullOrWhiteSpace($commitMessage)) {
-            $Result.ExitCode = 1
-            $message = "Custom Codex task commit message file is empty: $commitMessagePath."
-            Add-ResultOutput -Result $Result -Stdout "[dispatcher] $message" -Stderr $message
-            return
-        }
+    $ResultContract.filesChanged = @(Get-GitStatusFiles -StatusText $statusResult.Stdout)
+
+    $commitMessage = $ResultContract.commitMessage
+    if ([string]::IsNullOrWhiteSpace($commitMessage)) {
+        $Result.ExitCode = 1
+        $ResultContract.status = "failed"
+        $ResultContract.needsReview = $true
+        $commitMessagePath = Join-Path $DispatcherRoot "inbox\codex-task.commit.txt"
+        $message = "Custom Codex task commit message file is empty: $commitMessagePath."
+        $ResultContract.reviewHints = @($message)
+        Add-ResultOutput -Result $Result -Stdout "[dispatcher] $message" -Stderr $message
+        return
     }
 
     Write-Step "Auto commit message: $commitMessage"
@@ -162,21 +381,42 @@ function Invoke-CodexTaskGitCommit {
     Add-ResultOutput -Result $Result -Stdout $addResult.Stdout -Stderr $addResult.Stderr
     if ($addResult.ExitCode -ne 0) {
         $Result.ExitCode = $addResult.ExitCode
+        $ResultContract.status = "failed"
+        $ResultContract.needsReview = $true
+        $ResultContract.reviewHints = @("Git add failed.")
         Add-ResultOutput -Result $Result -Stdout "[dispatcher] Git add failed."
         Add-ResultOutput -Result $Result -Stdout $addResult.Stderr
         return
     }
+
+    $diffResult = Invoke-LoggedCommand -FilePath $Config.gitExe -ArgumentList @("diff", "--cached", "--binary") -WorkingDirectory $RepoPath -LogFile $LogFile
+    if ($diffResult.ExitCode -ne 0) {
+        $Result.ExitCode = $diffResult.ExitCode
+        $ResultContract.status = "failed"
+        $ResultContract.needsReview = $true
+        $ResultContract.reviewHints = @("Git diff generation failed.")
+        Add-ResultOutput -Result $Result -Stdout "[dispatcher] Git diff generation failed."
+        Add-ResultOutput -Result $Result -Stdout $diffResult.Stderr
+        return
+    }
+
+    Set-Content -LiteralPath $DiffPatch -Value $diffResult.Stdout -Encoding UTF8 -NoNewline
 
     $quotedCommitMessage = '"' + $commitMessage.Replace('"', '\"') + '"'
     $commitResult = Invoke-LoggedCommand -FilePath $Config.gitExe -ArgumentList @("commit", "-m", $quotedCommitMessage) -WorkingDirectory $RepoPath -LogFile $LogFile
     Add-ResultOutput -Result $Result -Stdout $commitResult.Stdout -Stderr $commitResult.Stderr
     if ($commitResult.ExitCode -ne 0) {
         $Result.ExitCode = $commitResult.ExitCode
+        $ResultContract.status = "failed"
+        $ResultContract.needsReview = $true
+        $ResultContract.reviewHints = @("Git commit failed.")
         Add-ResultOutput -Result $Result -Stdout "[dispatcher] Git commit failed."
         Add-ResultOutput -Result $Result -Stdout $commitResult.Stderr
         return
     }
 
+    $ResultContract.commit = Get-GitHeadCommit -RepoPath $RepoPath -Config $Config -LogFile $LogFile
+    $ResultContract.summary = "Codex worker changes committed by dispatcher."
     Write-Step "Git commit complete."
     Add-ResultOutput -Result $Result -Stdout "[dispatcher] Git commit complete."
 
@@ -189,6 +429,9 @@ function Invoke-CodexTaskGitCommit {
     if ($pushControl -notin @("true", "yes", "1")) {
         $Result.ExitCode = 1
         $message = "Invalid auto push control value in dispatcher/inbox/codex-task.push.txt. Use true, yes, or 1."
+        $ResultContract.status = "failed"
+        $ResultContract.needsReview = $true
+        $ResultContract.reviewHints = @($message)
         Add-ResultOutput -Result $Result -Stdout "[dispatcher] $message" -Stderr $message
         return
     }
@@ -199,6 +442,9 @@ function Invoke-CodexTaskGitCommit {
     if (-not $Config.safety.allowAutoPush) {
         $Result.ExitCode = 1
         $message = "Auto push disabled by config."
+        $ResultContract.status = "failed"
+        $ResultContract.needsReview = $true
+        $ResultContract.reviewHints = @($message)
         Add-ResultOutput -Result $Result -Stdout "[dispatcher] $message" -Stderr $message
         return
     }
@@ -207,6 +453,9 @@ function Invoke-CodexTaskGitCommit {
     Add-ResultOutput -Result $Result -Stdout $pushResult.Stdout -Stderr $pushResult.Stderr
     if ($pushResult.ExitCode -ne 0) {
         $Result.ExitCode = $pushResult.ExitCode
+        $ResultContract.status = "failed"
+        $ResultContract.needsReview = $true
+        $ResultContract.reviewHints = @("Git push failed.")
         Add-ResultOutput -Result $Result -Stdout "[dispatcher] Git push failed."
         Add-ResultOutput -Result $Result -Stdout $pushResult.Stderr
         return
@@ -214,6 +463,7 @@ function Invoke-CodexTaskGitCommit {
 
     Write-Step "Git push complete."
     Add-ResultOutput -Result $Result -Stdout "[dispatcher] Git push complete."
+    $ResultContract.pushed = $true
 }
 
 $projectRoot = Split-Path $PSScriptRoot -Parent
@@ -270,6 +520,40 @@ if ($task.worker -eq "codex_inbox") {
     }
 }
 
+$runContext = $null
+$taskContract = $null
+$resultContract = $null
+$taskText = ""
+$runStartedAt = $null
+$workerLogsCaptured = $false
+
+if ($task.worker -eq "codex_inbox") {
+    $taskId = New-TaskId
+    $runContext = New-RunContext -TaskId $taskId
+    $taskText = Get-CodexTaskPrompt
+    $commitMessage = Get-CodexTaskCommitMessage -DispatcherRoot $PSScriptRoot
+    $resolvedRepoPath = if (Test-Path -LiteralPath $repoPath -PathType Container) { (Resolve-Path -LiteralPath $repoPath).Path } else { $repoPath }
+
+    Set-Content -LiteralPath $runContext.StdoutLog -Value "" -Encoding UTF8 -NoNewline
+    Set-Content -LiteralPath $runContext.StderrLog -Value "" -Encoding UTF8 -NoNewline
+    Set-Content -LiteralPath $runContext.DiffPatch -Value "" -Encoding UTF8 -NoNewline
+
+    $taskContract = [ordered]@{
+        taskId = $taskId
+        status = "created"
+        createdAt = (Get-Date).ToString("o")
+        startedAt = $null
+        completedAt = $null
+        durationMs = $null
+        repo = $repoPath
+        resolvedRepo = $resolvedRepoPath
+        worker = "codex"
+        task = $taskText
+        commitMessage = $commitMessage
+    }
+    Write-JsonFile -Path $runContext.TaskJson -Value $taskContract
+}
+
 $logFile = New-LogFile -TaskName $TaskName
 
 Add-Content -Path $logFile -Value "JJ AI Dispatcher Log"
@@ -301,6 +585,11 @@ switch ($task.worker) {
     }
 
     "codex_inbox" {
+        $runStartedAt = Get-Date
+        $taskContract.status = "running"
+        $taskContract.startedAt = $runStartedAt.ToString("o")
+        Write-JsonFile -Path $runContext.TaskJson -Value $taskContract
+
         if (-not [string]::IsNullOrWhiteSpace($codexInboxRepoError)) {
             $result = New-FailedResult -Message $codexInboxRepoError
             Add-Content -Path $logFile -Value "ERROR:"
@@ -346,8 +635,28 @@ exit `$LASTEXITCODE
 "@
         $encodedRunner = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($runner))
         $result = Invoke-LoggedCommand -FilePath "pwsh" -ArgumentList @("-NoProfile", "-ExecutionPolicy", "Bypass", "-EncodedCommand", $encodedRunner) -WorkingDirectory $projectRoot -LogFile $logFile
+        Set-Content -LiteralPath $runContext.StdoutLog -Value $result.Stdout -Encoding UTF8 -NoNewline
+        Set-Content -LiteralPath $runContext.StderrLog -Value $result.Stderr -Encoding UTF8 -NoNewline
+        $workerLogsCaptured = $true
+        $resultContract = Normalize-WorkerResult `
+            -Result $result `
+            -TaskId $runContext.TaskId `
+            -RepoPath $resolvedRepoPath `
+            -Worker "codex" `
+            -CommitMessage $taskContract.commitMessage `
+            -StdoutPath $runContext.StdoutLog `
+            -StderrPath $runContext.StderrLog `
+            -DiffPath $runContext.DiffPatch
+
         if ($result.ExitCode -eq 0) {
-            Invoke-CodexTaskGitCommit -Result $result -RepoPath $repoPath -Config $config -LogFile $logFile -DispatcherRoot $PSScriptRoot
+            Invoke-CodexTaskGitCommit `
+                -Result $result `
+                -ResultContract $resultContract `
+                -RepoPath $repoPath `
+                -Config $config `
+                -LogFile $logFile `
+                -DispatcherRoot $PSScriptRoot `
+                -DiffPatch $runContext.DiffPatch
         }
     }
 
@@ -378,12 +687,64 @@ exit `$LASTEXITCODE
     }
 }
 
+if ($runContext) {
+    if (-not $workerLogsCaptured) {
+        Set-Content -LiteralPath $runContext.StdoutLog -Value $result.Stdout -Encoding UTF8 -NoNewline
+        Set-Content -LiteralPath $runContext.StderrLog -Value $result.Stderr -Encoding UTF8 -NoNewline
+    }
+
+    if (-not $resultContract) {
+        $resultContract = Normalize-WorkerResult `
+            -Result $result `
+            -TaskId $runContext.TaskId `
+            -RepoPath $resolvedRepoPath `
+            -Worker "codex" `
+            -CommitMessage $taskContract.commitMessage `
+            -StdoutPath $runContext.StdoutLog `
+            -StderrPath $runContext.StderrLog `
+            -DiffPath $runContext.DiffPatch
+    }
+
+    if ($result.ExitCode -ne 0) {
+        $resultContract.status = "failed"
+        $resultContract.needsReview = $true
+        if ($resultContract.reviewHints.Count -eq 0) {
+            $hint = if ([string]::IsNullOrWhiteSpace($result.Stderr)) { "Codex task did not complete successfully." } else { $result.Stderr.Trim() }
+            $resultContract.reviewHints = @($hint)
+        }
+    }
+
+    if (Test-Path -LiteralPath $repoPath -PathType Container) {
+        $finalStatus = Invoke-LoggedCommand -FilePath $config.gitExe -ArgumentList @("status", "--short") -WorkingDirectory $repoPath -LogFile $logFile
+        if ($finalStatus.ExitCode -eq 0) {
+            $resultContract.workingTreeClean = [string]::IsNullOrWhiteSpace($finalStatus.Stdout)
+        }
+    }
+
+    $completedAt = Get-Date
+    if (-not $runStartedAt) {
+        $runStartedAt = $completedAt
+    }
+
+    $taskContract.status = $resultContract.status
+    $taskContract.completedAt = $completedAt.ToString("o")
+    $taskContract.durationMs = [int64]($completedAt - $runStartedAt).TotalMilliseconds
+
+    Write-JsonFile -Path $runContext.TaskJson -Value $taskContract
+    Write-JsonFile -Path $runContext.ResultJson -Value $resultContract
+    Write-RunSummary -RunContext $runContext -ResultContract $resultContract -TaskText $taskText
+}
+
 Write-Host ""
 Write-Host "===== JJ AI Dispatcher Summary ====="
 Write-Host "Task      : $TaskName"
 Write-Host "Worker    : $($task.worker)"
 Write-Host "Exit Code : $($result.ExitCode)"
 Write-Host "Log File  : $logFile"
+if ($runContext) {
+    Write-Host "Run Dir   : $($runContext.RunDir)"
+    Write-Host "Result    : $($runContext.ResultJson)"
+}
 Write-Host ""
 
 if ($VerboseLog) {
