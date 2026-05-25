@@ -1,0 +1,6 @@
+Write a concise status summary for this repository.
+
+Constraints:
+- Inspect only the current repository.
+- Do not modify files.
+- Do not commit or push.

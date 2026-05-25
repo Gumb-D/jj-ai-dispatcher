@@ -78,6 +78,16 @@ function Invoke-LoggedCommand {
     }
 }
 
+function New-FailedResult {
+    param([string]$Message)
+
+    return @{
+        ExitCode = 1
+        Stdout = ""
+        Stderr = $Message
+    }
+}
+
 $projectRoot = Split-Path $PSScriptRoot -Parent
 $configPath = Join-Path $PSScriptRoot "config.json"
 $localConfigPath = Join-Path $PSScriptRoot "config.local.json"
@@ -136,6 +146,45 @@ switch ($task.worker) {
         )
         $pwshArgs = @("-NoProfile", "-ExecutionPolicy", "Bypass", "-File", "`"$scriptPath`"") + $args
         $result = Invoke-LoggedCommand -FilePath "pwsh" -ArgumentList $pwshArgs -WorkingDirectory $projectRoot -LogFile $logFile
+    }
+
+    "codex_inbox" {
+        $promptPath = Join-Path $PSScriptRoot $task.command
+        if (-not (Test-Path -LiteralPath $promptPath -PathType Leaf)) {
+            $result = New-FailedResult -Message "Missing custom Codex task input file: $promptPath. Create it from dispatcher/inbox/codex-task.example.txt."
+            Add-Content -Path $logFile -Value "ERROR:"
+            Add-Content -Path $logFile -Value $result.Stderr
+            Add-Content -Path $logFile -Value ""
+            Add-Content -Path $logFile -Value "EXIT CODE: $($result.ExitCode)"
+            break
+        }
+
+        $prompt = Get-Content -LiteralPath $promptPath -Raw
+        if ([string]::IsNullOrWhiteSpace($prompt)) {
+            $result = New-FailedResult -Message "Custom Codex task input file is empty: $promptPath."
+            Add-Content -Path $logFile -Value "ERROR:"
+            Add-Content -Path $logFile -Value $result.Stderr
+            Add-Content -Path $logFile -Value ""
+            Add-Content -Path $logFile -Value "EXIT CODE: $($result.ExitCode)"
+            break
+        }
+
+        $escapedConfigLoaderPath = $configLoaderPath.Replace("'", "''")
+        $escapedPromptPath = $promptPath.Replace("'", "''")
+        $escapedRepoPath = $repoPath.Replace("'", "''")
+        $runner = @"
+`$ErrorActionPreference = "Stop"
+`$config = & '$escapedConfigLoaderPath'
+`$prompt = Get-Content -LiteralPath '$escapedPromptPath' -Raw
+Write-Host "[codex-worker] Prompt: dispatcher/inbox/codex-task.txt"
+Write-Host "[codex-worker] Repo: $escapedRepoPath"
+Write-Host "[codex-worker] Safety: no auto-push, no destructive actions unless explicitly requested."
+Write-Host ""
+& `$config.codexExe exec --cd '$escapedRepoPath' `$prompt
+exit `$LASTEXITCODE
+"@
+        $encodedRunner = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($runner))
+        $result = Invoke-LoggedCommand -FilePath "pwsh" -ArgumentList @("-NoProfile", "-ExecutionPolicy", "Bypass", "-EncodedCommand", $encodedRunner) -WorkingDirectory $projectRoot -LogFile $logFile
     }
 
     "openclaw" {

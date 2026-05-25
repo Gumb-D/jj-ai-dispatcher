@@ -5,6 +5,12 @@
     "command": "codex-safe-commit.md",
     "description": "Ask Codex to inspect repo changes and prepare a safe commit plan without pushing."
   },
+  "codex_task": {
+    "name": "codex_task",
+    "worker": "codex_inbox",
+    "command": "inbox\\codex-task.txt",
+    "description": "Run a user-provided Codex task from dispatcher/inbox/codex-task.txt."
+  },
   "secure_scan": {
     "name": "secure_scan",
     "worker": "codex",

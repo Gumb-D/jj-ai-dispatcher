@@ -3,5 +3,6 @@ dispatcher/logs/*.tmp
 dispatcher/logs/*.stdout.tmp
 dispatcher/logs/*.stderr.tmp
 dispatcher/config.local.json
+dispatcher/inbox/codex-task.txt
 
 .vscode/
