@@ -1,7 +1,0 @@
-JJ AI Dispatcher Log
-Timestamp: 2026-05-25T09:37:37.4499227+08:00
-Task: git_status
-Worker: git
-Description: Show concise Git branch and working tree status.
-Repo: D:\dev\projects\your-private-repo
-

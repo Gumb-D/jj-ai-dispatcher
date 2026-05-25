@@ -1,0 +1,6 @@
+dispatcher/logs/*.log
+dispatcher/logs/*.tmp
+dispatcher/logs/*.stdout.tmp
+dispatcher/logs/*.stderr.tmp
+
+.vscode/
