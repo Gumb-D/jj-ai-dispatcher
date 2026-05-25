@@ -7,13 +7,13 @@ param(
 $ErrorActionPreference = "Stop"
 
 $projectRoot = Split-Path $PSScriptRoot -Parent
-$configPath = Join-Path $projectRoot "dispatcher\config.json"
+$configLoaderPath = Join-Path $PSScriptRoot "load-config.ps1"
 
-if (-not (Test-Path $configPath)) {
-    throw "Missing config file: $configPath"
+if (-not (Test-Path $configLoaderPath)) {
+    throw "Missing config loader: $configLoaderPath"
 }
 
-$config = Get-Content $configPath -Raw | ConvertFrom-Json
+$config = & $configLoaderPath
 $openclaw = $config.openclawExe
 
 Write-Host "[openclaw-worker] Action: $Action"

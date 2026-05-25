@@ -1,0 +1,10 @@
+{
+  "defaultRepo": "D:\\path\\to\\your\\repo",
+  "codexExe": "C:\\Users\\your-user\\AppData\\Roaming\\npm\\codex.cmd",
+  "openclawExe": "C:\\path\\to\\openclaw.exe",
+  "safety": {
+    "allowAutoPush": false,
+    "allowAutoDelete": false,
+    "allowSystemSettingModification": false
+  }
+}

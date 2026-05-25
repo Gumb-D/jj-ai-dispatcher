@@ -80,6 +80,8 @@ function Invoke-LoggedCommand {
 
 $projectRoot = Split-Path $PSScriptRoot -Parent
 $configPath = Join-Path $PSScriptRoot "config.json"
+$localConfigPath = Join-Path $PSScriptRoot "config.local.json"
+$configLoaderPath = Join-Path $projectRoot "scripts\load-config.ps1"
 $tasksPath = Join-Path $PSScriptRoot "tasks.json"
 
 if (-not (Test-Path $configPath)) {
@@ -90,7 +92,12 @@ if (-not (Test-Path $tasksPath)) {
     throw "Missing tasks file: $tasksPath"
 }
 
-$config = Get-Content $configPath -Raw | ConvertFrom-Json
+if (-not (Test-Path $configLoaderPath)) {
+    throw "Missing config loader: $configLoaderPath"
+}
+
+$config = & $configLoaderPath
+$localConfigLoaded = Test-Path $localConfigPath
 $tasks = Get-Content $tasksPath -Raw | ConvertFrom-Json
 
 if (-not $tasks.PSObject.Properties.Name.Contains($TaskName)) {
@@ -109,10 +116,12 @@ Add-Content -Path $logFile -Value "Task: $TaskName"
 Add-Content -Path $logFile -Value "Worker: $($task.worker)"
 Add-Content -Path $logFile -Value "Description: $($task.description)"
 Add-Content -Path $logFile -Value "Repo: $repoPath"
+Add-Content -Path $logFile -Value "Local config override loaded: $localConfigLoaded"
 Add-Content -Path $logFile -Value ""
 
 Write-Step "Task: $TaskName"
 Write-Step "Worker: $($task.worker)"
+Write-Step "Local config override: $(if ($localConfigLoaded) { 'loaded' } else { 'not found' })"
 Write-Step "Repo: $repoPath"
 Write-Step "Log: $logFile"
 

@@ -8,8 +8,7 @@ param(
 
 $ErrorActionPreference = "Stop"
 
-$projectRoot = Split-Path $PSScriptRoot -Parent
-$config = Get-Content (Join-Path $projectRoot "dispatcher\config.json") -Raw | ConvertFrom-Json
+$config = & (Join-Path $PSScriptRoot "load-config.ps1")
 
 if ($Follow) {
     & $config.openclawExe logs --follow

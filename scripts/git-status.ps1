@@ -6,9 +6,11 @@ param(
 $ErrorActionPreference = "Stop"
 
 if ([string]::IsNullOrWhiteSpace($Repo)) {
-    $projectRoot = Split-Path $PSScriptRoot -Parent
-    $config = Get-Content (Join-Path $projectRoot "dispatcher\config.json") -Raw | ConvertFrom-Json
+    $config = & (Join-Path $PSScriptRoot "load-config.ps1")
     $Repo = $config.defaultRepo
+}
+else {
+    $config = & (Join-Path $PSScriptRoot "load-config.ps1")
 }
 
 if (-not (Test-Path $Repo)) {
@@ -17,8 +19,8 @@ if (-not (Test-Path $Repo)) {
 
 Push-Location $Repo
 try {
-    git status --short --branch
-    git remote -v
+    & $config.gitExe status --short --branch
+    & $config.gitExe remote -v
 }
 finally {
     Pop-Location

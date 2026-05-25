@@ -9,11 +9,11 @@ param(
 $ErrorActionPreference = "Stop"
 
 $projectRoot = Split-Path $PSScriptRoot -Parent
-$configPath = Join-Path $projectRoot "dispatcher\config.json"
+$configLoaderPath = Join-Path $PSScriptRoot "load-config.ps1"
 $promptPath = Join-Path $projectRoot "prompts\$PromptFile"
 
-if (-not (Test-Path $configPath)) {
-    throw "Missing config file: $configPath"
+if (-not (Test-Path $configLoaderPath)) {
+    throw "Missing config loader: $configLoaderPath"
 }
 
 if (-not (Test-Path $promptPath)) {
@@ -24,7 +24,7 @@ if (-not (Test-Path $Repo)) {
     throw "Repo path not found: $Repo"
 }
 
-$config = Get-Content $configPath -Raw | ConvertFrom-Json
+$config = & $configLoaderPath
 $prompt = Get-Content $promptPath -Raw
 
 Write-Host "[codex-worker] Prompt: $PromptFile"
