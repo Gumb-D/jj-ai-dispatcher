@@ -696,8 +696,8 @@ Phase 3.1 foundation status:
 
 ```text
 Local bridge foundation.
-Implemented endpoints: GET /status, POST /dispatch.
-Dispatch execution and result APIs remain intentionally blocked.
+Implemented endpoints: GET /status, POST /dispatch, GET /runs/latest, GET /runs/{taskId}.
+Run result endpoints are read-only and expose only existing result.json artifacts.
 ```
 
 Current skeleton:
@@ -711,6 +711,8 @@ Current endpoint:
 ```text
 GET /status
 POST /dispatch
+GET /runs/latest
+GET /runs/{taskId}
 ```
 
 ---
@@ -788,6 +790,14 @@ Purpose:
 Return latest run result.
 ```
 
+Rules:
+
+```text
+Use newest dispatcher/runs/<task-id>/ folder.
+Read dispatcher/runs/<task-id>/result.json only.
+Do not modify run artifacts.
+```
+
 Response:
 
 ```json
@@ -808,6 +818,16 @@ Purpose:
 
 ```text
 Return specific run result.
+```
+
+Rules:
+
+```text
+Validate taskId.
+Reject malformed taskId with 400.
+Return 404 for missing runs or missing result.json.
+Return 500 for invalid result.json.
+Prevent ../ traversal and arbitrary file reads.
 ```
 
 Response:

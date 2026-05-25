@@ -238,6 +238,146 @@ function Invoke-DispatchRequest {
     })
 }
 
+function Test-TaskId {
+    param([string]$TaskId)
+
+    return -not [string]::IsNullOrWhiteSpace($TaskId) -and $TaskId -match '^[0-9]{8}-[0-9]{6}-[A-Za-z0-9]+$'
+}
+
+function Get-RunsRoot {
+    return Join-Path $dispatcherRoot "runs"
+}
+
+function Get-RunResultPath {
+    param([string]$TaskId)
+
+    $runsRoot = Get-RunsRoot
+    $runPath = Join-Path $runsRoot $TaskId
+    $resolvedRunsRoot = [System.IO.Path]::GetFullPath($runsRoot)
+    $resolvedRunPath = [System.IO.Path]::GetFullPath($runPath)
+
+    if (-not $resolvedRunPath.StartsWith($resolvedRunsRoot, [System.StringComparison]::OrdinalIgnoreCase)) {
+        throw "Run path escaped dispatcher/runs."
+    }
+
+    return Join-Path $resolvedRunPath "result.json"
+}
+
+function Read-RunResult {
+    param(
+        [System.Net.HttpListenerResponse]$Response,
+        [string]$TaskId
+    )
+
+    if (-not (Test-TaskId -TaskId $TaskId)) {
+        Write-JsonResponse -Response $Response -StatusCode 400 -Body ([ordered]@{
+            status = "invalid_task_id"
+            error = "Malformed taskId."
+        })
+        return
+    }
+
+    try {
+        $resultPath = Get-RunResultPath -TaskId $TaskId
+    }
+    catch {
+        Write-JsonResponse -Response $Response -StatusCode 400 -Body ([ordered]@{
+            status = "invalid_task_id"
+            error = "Malformed taskId."
+        })
+        return
+    }
+
+    if (-not (Test-Path -LiteralPath $resultPath -PathType Leaf)) {
+        Write-JsonResponse -Response $Response -StatusCode 404 -Body ([ordered]@{
+            status = "not_found"
+            error = "Run result not found."
+        })
+        return
+    }
+
+    try {
+        $result = Get-Content -LiteralPath $resultPath -Raw | ConvertFrom-Json
+    }
+    catch {
+        Write-JsonResponse -Response $Response -StatusCode 500 -Body ([ordered]@{
+            status = "invalid_result_json"
+            error = "Run result JSON could not be parsed."
+        })
+        return
+    }
+
+    Write-JsonResponse -Response $Response -StatusCode 200 -Body $result
+}
+
+function Get-LatestRunTaskId {
+    $runsRoot = Get-RunsRoot
+    if (-not (Test-Path -LiteralPath $runsRoot -PathType Container)) {
+        return $null
+    }
+
+    $latest = Get-ChildItem -LiteralPath $runsRoot -Directory |
+        Where-Object { Test-TaskId -TaskId $_.Name } |
+        Sort-Object Name -Descending |
+        Select-Object -First 1
+
+    if ($null -eq $latest) {
+        return $null
+    }
+
+    return $latest.Name
+}
+
+function Invoke-RunResultRequest {
+    param([System.Net.HttpListenerContext]$Context)
+
+    $request = $Context.Request
+    $response = $Context.Response
+    $path = $request.Url.AbsolutePath.TrimEnd("/")
+
+    if ($request.HttpMethod -ne "GET") {
+        Write-JsonResponse -Response $response -StatusCode 404 -Body ([ordered]@{
+            status = "not_found"
+            error = "Run result endpoint not found."
+        })
+        return
+    }
+
+    if ($path -eq "/runs/latest") {
+        $taskId = Get-LatestRunTaskId
+        if ([string]::IsNullOrWhiteSpace($taskId)) {
+            Write-JsonResponse -Response $response -StatusCode 404 -Body ([ordered]@{
+                status = "not_found"
+                error = "No run results found."
+            })
+            return
+        }
+
+        Read-RunResult -Response $response -TaskId $taskId
+        return
+    }
+
+    if ($path -eq "/runs") {
+        Write-JsonResponse -Response $response -StatusCode 404 -Body ([ordered]@{
+            status = "not_found"
+            error = "Missing taskId."
+        })
+        return
+    }
+
+    $prefix = "/runs/"
+    if ($path.StartsWith($prefix, [System.StringComparison]::OrdinalIgnoreCase)) {
+        $taskId = $path.Substring($prefix.Length)
+        Read-RunResult -Response $response -TaskId $taskId
+        return
+    }
+
+    Write-JsonResponse -Response $response -StatusCode 404 -Body ([ordered]@{
+        status = "not_found"
+        error = "Run result endpoint not found."
+    })
+}
+
 function Invoke-BridgeRequest {
     param(
         [System.Net.HttpListenerContext]$Context,
@@ -265,10 +405,15 @@ function Invoke-BridgeRequest {
         return
     }
 
+    if ($request.Url.AbsolutePath -eq "/runs" -or $request.Url.AbsolutePath.StartsWith("/runs/", [System.StringComparison]::OrdinalIgnoreCase)) {
+        Invoke-RunResultRequest -Context $Context
+        return
+    }
+
     if ($request.HttpMethod -ne "GET" -or $request.Url.AbsolutePath -ne "/status") {
         Write-JsonResponse -Response $response -StatusCode 404 -Body ([ordered]@{
             status = "not_found"
-            error = "Only GET /status and POST /dispatch are available."
+            error = "Only GET /status, POST /dispatch, GET /runs/latest, and GET /runs/{taskId} are available."
         })
         return
     }
