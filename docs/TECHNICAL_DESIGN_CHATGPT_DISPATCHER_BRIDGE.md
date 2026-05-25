@@ -885,6 +885,15 @@ Token header example:
 X-Dispatcher-Token: <local-token>
 ```
 
+Token validation:
+
+```text
+If bridge.requireToken=false, requests are allowed without a token.
+If bridge.requireToken=true and bridge.token is empty, requests fail with config_error.
+If X-Dispatcher-Token is missing, requests fail with unauthorized.
+If X-Dispatcher-Token does not match bridge.token, requests fail with forbidden.
+```
+
 ---
 
 ## 15. Configuration Design
@@ -900,7 +909,8 @@ Suggested config:
     "enabled": false,
     "host": "127.0.0.1",
     "port": 8787,
-    "requireToken": true
+    "requireToken": true,
+    "token": ""
   },
   "repoAliases": {
     "self": "D:\\dev\\projects\\jj-ai-dispatcher",
@@ -915,6 +925,20 @@ Local secrets should stay in:
 
 ```text
 dispatcher/config.local.json
+```
+
+`dispatcher/config.json` must keep `bridge.token` empty.
+
+Real local bridge tokens belong only in ignored local config:
+
+```json
+{
+  "bridge": {
+    "enabled": true,
+    "requireToken": true,
+    "token": "<local-only-token>"
+  }
+}
 ```
 
 Do not commit real tokens.

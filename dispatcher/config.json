@@ -8,7 +8,8 @@
     "enabled": false,
     "host": "127.0.0.1",
     "port": 8787,
-    "requireToken": true
+    "requireToken": true,
+    "token": ""
   },
   "safety": {
     "allowAutoPush": false,

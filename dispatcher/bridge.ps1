@@ -50,18 +50,76 @@ function Write-JsonResponse {
     $Response.OutputStream.Close()
 }
 
+function Compare-TokenBytes {
+    param(
+        [string]$Expected,
+        [string]$Actual
+    )
+
+    $expectedBytes = [Text.Encoding]::UTF8.GetBytes($Expected)
+    $actualBytes = [Text.Encoding]::UTF8.GetBytes($Actual)
+    $diff = $expectedBytes.Length -bxor $actualBytes.Length
+    $maxLength = [Math]::Max($expectedBytes.Length, $actualBytes.Length)
+
+    for ($i = 0; $i -lt $maxLength; $i++) {
+        $expectedByte = if ($i -lt $expectedBytes.Length) { $expectedBytes[$i] } else { 0 }
+        $actualByte = if ($i -lt $actualBytes.Length) { $actualBytes[$i] } else { 0 }
+        $diff = $diff -bor ($expectedByte -bxor $actualByte)
+    }
+
+    return $diff -eq 0
+}
+
 function Test-BridgeToken {
     param(
         [System.Net.HttpListenerRequest]$Request,
-        [bool]$RequireToken
+        [bool]$RequireToken,
+        [string]$ConfiguredToken
     )
 
     if (-not $RequireToken) {
-        return $true
+        return [pscustomobject]@{
+            Allowed = $true
+            StatusCode = 200
+            Status = "ok"
+            Error = ""
+        }
+    }
+
+    if ([string]::IsNullOrWhiteSpace($ConfiguredToken)) {
+        return [pscustomobject]@{
+            Allowed = $false
+            StatusCode = 500
+            Status = "config_error"
+            Error = "Bridge token is required but not configured."
+        }
     }
 
     $token = $Request.Headers["X-Dispatcher-Token"]
-    return -not [string]::IsNullOrWhiteSpace($token)
+    if ([string]::IsNullOrWhiteSpace($token)) {
+        return [pscustomobject]@{
+            Allowed = $false
+            StatusCode = 401
+            Status = "unauthorized"
+            Error = "X-Dispatcher-Token header required."
+        }
+    }
+
+    if (-not (Compare-TokenBytes -Expected $ConfiguredToken -Actual $token)) {
+        return [pscustomobject]@{
+            Allowed = $false
+            StatusCode = 403
+            Status = "forbidden"
+            Error = "X-Dispatcher-Token did not match."
+        }
+    }
+
+    return [pscustomobject]@{
+        Allowed = $true
+        StatusCode = 200
+        Status = "ok"
+        Error = ""
+    }
 }
 
 function Update-BridgeTaskState {
@@ -384,6 +442,7 @@ function Invoke-BridgeRequest {
         [pscustomobject]$Config,
         [pscustomobject]$State,
         [bool]$RequireToken,
+        [string]$ConfiguredToken,
         [bool]$BridgeEnabled
     )
 
@@ -392,10 +451,11 @@ function Invoke-BridgeRequest {
 
     Update-BridgeTaskState -State $State
 
-    if (-not (Test-BridgeToken -Request $request -RequireToken $RequireToken)) {
-        Write-JsonResponse -Response $response -StatusCode 401 -Body ([ordered]@{
-            status = "unauthorized"
-            error = "X-Dispatcher-Token header required"
+    $tokenResult = Test-BridgeToken -Request $request -RequireToken $RequireToken -ConfiguredToken $ConfiguredToken
+    if (-not $tokenResult.Allowed) {
+        Write-JsonResponse -Response $response -StatusCode $tokenResult.StatusCode -Body ([ordered]@{
+            status = $tokenResult.Status
+            error = $tokenResult.Error
         })
         return
     }
@@ -438,6 +498,7 @@ $bridgeEnabled = [bool](Get-ConfigValue -Object $bridgeConfig -Name "enabled" -D
 $hostName = [string](Get-ConfigValue -Object $bridgeConfig -Name "host" -DefaultValue "127.0.0.1")
 $port = [int](Get-ConfigValue -Object $bridgeConfig -Name "port" -DefaultValue 8787)
 $requireToken = [bool](Get-ConfigValue -Object $bridgeConfig -Name "requireToken" -DefaultValue $true)
+$configuredToken = [string](Get-ConfigValue -Object $bridgeConfig -Name "token" -DefaultValue "")
 
 if (-not $bridgeEnabled) {
     Write-BridgeStep "Bridge disabled by config. Server not started."
@@ -464,6 +525,7 @@ try {
             -Config $config `
             -State $bridgeState `
             -RequireToken $requireToken `
+            -ConfiguredToken $configuredToken `
             -BridgeEnabled $bridgeEnabled
     } while (-not $Once)
 }
