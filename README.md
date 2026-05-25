@@ -38,6 +38,38 @@ Or directly:
 .\dispatcher\run.ps1 codex_task
 ```
 
+## Dispatcher CLI Usage
+
+Run a Codex task against the configured default repo:
+```powershell
+.\dispatcher\ask "update README"
+```
+
+Run a Codex task against this dispatcher repo:
+```powershell
+.\dispatcher\ask self "update README"
+```
+
+Run a Codex task against another repo:
+```powershell
+.\dispatcher\ask D:\dev\projects\other-repo "update README"
+```
+
+Run a Codex task with a custom commit message:
+```powershell
+.\dispatcher\ask self "update README" -m "docs: update README"
+```
+
+`ask.ps1` is a small CLI wrapper around the existing inbox workflow:
+- task prompt is written to `dispatcher/inbox/codex-task.txt`
+- optional repo target is written to `dispatcher/inbox/codex-task.repo.txt`
+- optional commit message is written to `dispatcher/inbox/codex-task.commit.txt`
+- `dispatcher/run.ps1 codex_task` runs Codex, owns the git commit, and handles optional auto-push
+
+Current role split:
+- Dispatcher owns orchestration and git operations
+- Codex owns file edits
+
 ## Custom Codex Task
 
 Use codex-task.repo.txt when the target repo is not config.defaultRepo.
