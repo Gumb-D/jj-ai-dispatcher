@@ -41,6 +41,7 @@ Or directly:
 ## Custom Codex Task
 
 Use codex-task.repo.txt when the target repo is not config.defaultRepo.
+Dispatcher can optionally own git commit for codex_task.
 
 - `dispatcher/inbox/codex-task.txt` = prompt sent to Codex
 - `dispatcher/inbox/codex-task.repo.txt` = optional target repo override
