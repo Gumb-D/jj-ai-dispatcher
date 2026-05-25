@@ -4,3 +4,7 @@ Constraints:
 - Inspect only the current repository.
 - Do not modify files.
 - Do not commit or push.
+
+Optional target repo override:
+- Create dispatcher/inbox/codex-task.repo.txt with one repo path.
+- Leave it absent or empty to use config.defaultRepo.

@@ -35,7 +35,14 @@ Or directly:
 .\dispatcher\run.ps1 safe_commit
 .\dispatcher\run.ps1 secure_scan
 .\dispatcher\run.ps1 repo_cleanup
+.\dispatcher\run.ps1 codex_task
 ```
+
+## Custom Codex Task
+
+- `dispatcher/inbox/codex-task.txt` = prompt sent to Codex
+- `dispatcher/inbox/codex-task.repo.txt` = optional target repo override
+- If no repo override is provided, `codex_task` uses `defaultRepo` from config
 
 ## Configuration
 

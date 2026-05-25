@@ -117,6 +117,30 @@ if (-not $tasks.PSObject.Properties.Name.Contains($TaskName)) {
 
 $task = $tasks.$TaskName
 $repoPath = if ($Repo) { $Repo } else { $config.defaultRepo }
+$codexInboxRepoError = ""
+
+if ($task.worker -eq "codex_inbox") {
+    $repoOverridePath = Join-Path $PSScriptRoot "inbox\codex-task.repo.txt"
+    if (Test-Path -LiteralPath $repoOverridePath -PathType Leaf) {
+        $repoOverride = (Get-Content -LiteralPath $repoOverridePath -Raw).Trim()
+        if (-not [string]::IsNullOrWhiteSpace($repoOverride)) {
+            $repoPath = $repoOverride
+        }
+    }
+
+    if ([string]::IsNullOrWhiteSpace($repoPath)) {
+        $codexInboxRepoError = "Target repo is empty. Set defaultRepo in config or provide dispatcher/inbox/codex-task.repo.txt."
+    }
+    elseif (-not (Test-Path -LiteralPath $repoPath -PathType Container)) {
+        $codexInboxRepoError = "Target repo path not found: $repoPath"
+    }
+    else {
+        $gitDir = Join-Path $repoPath ".git"
+        if (-not (Test-Path -LiteralPath $gitDir)) {
+            $codexInboxRepoError = "Target repo is not a git repo: $repoPath"
+        }
+    }
+}
 
 $logFile = New-LogFile -TaskName $TaskName
 
@@ -149,6 +173,15 @@ switch ($task.worker) {
     }
 
     "codex_inbox" {
+        if (-not [string]::IsNullOrWhiteSpace($codexInboxRepoError)) {
+            $result = New-FailedResult -Message $codexInboxRepoError
+            Add-Content -Path $logFile -Value "ERROR:"
+            Add-Content -Path $logFile -Value $result.Stderr
+            Add-Content -Path $logFile -Value ""
+            Add-Content -Path $logFile -Value "EXIT CODE: $($result.ExitCode)"
+            break
+        }
+
         $promptPath = Join-Path $PSScriptRoot $task.command
         if (-not (Test-Path -LiteralPath $promptPath -PathType Leaf)) {
             $result = New-FailedResult -Message "Missing custom Codex task input file: $promptPath. Create it from dispatcher/inbox/codex-task.example.txt."
@@ -177,7 +210,7 @@ switch ($task.worker) {
 `$config = & '$escapedConfigLoaderPath'
 `$prompt = Get-Content -LiteralPath '$escapedPromptPath' -Raw
 Write-Host "[codex-worker] Prompt: dispatcher/inbox/codex-task.txt"
-Write-Host "[codex-worker] Repo: $escapedRepoPath"
+Write-Host "[codex-worker] Target repo: $escapedRepoPath"
 Write-Host "[codex-worker] Safety: no auto-push, no destructive actions unless explicitly requested."
 Write-Host ""
 & `$config.codexExe exec --cd '$escapedRepoPath' `$prompt
