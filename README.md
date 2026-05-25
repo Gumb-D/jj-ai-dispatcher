@@ -40,6 +40,8 @@ Or directly:
 
 ## Custom Codex Task
 
+Use codex-task.repo.txt when the target repo is not config.defaultRepo.
+
 - `dispatcher/inbox/codex-task.txt` = prompt sent to Codex
 - `dispatcher/inbox/codex-task.repo.txt` = optional target repo override
 - If no repo override is provided, `codex_task` uses `defaultRepo` from config
