@@ -159,17 +159,51 @@ to bridge + feedback architecture.
 Status:
 
 ```text
-NEXT
+IN PROGRESS
 ```
 
 Official order:
 
 ```text
-3.0 Run Result Contract
-3.1 Local Bridge Foundation
+3.0 Run Result Contract COMPLETE
+3.1 Local Bridge Foundation NEXT
 3.2 Dispatch API
 3.3 Result API
 3.4 Token Safety
+```
+
+Phase 3.0 completion:
+
+```text
+Commit: b12b993 feat: add dispatcher run result contract
+```
+
+Delivered:
+
+```text
+dispatcher/runs/<task-id>/task.json
+dispatcher/runs/<task-id>/result.json
+dispatcher/runs/<task-id>/summary.md
+dispatcher/runs/<task-id>/codex-output.log
+dispatcher/runs/<task-id>/codex-error.log
+dispatcher/runs/<task-id>/git-diff.patch
+```
+
+Validation:
+
+```text
+PowerShell parser check PASS
+env_check PASS
+safe self test PASS
+run artifacts confirmed
+git diff --check PASS
+working tree clean
+```
+
+Current status:
+
+```text
+Ready for Phase 3.1 Local HTTP Bridge
 ```
 
 ---
@@ -204,12 +238,18 @@ ChatGPT Review
 
 ---
 
-## Phase 3.0 — Next Implementation
+## Phase 3.0 — Run Result Contract
 
-Objective:
+Status:
 
 ```text
-Implement Run Result Contract.
+COMPLETE
+```
+
+Commit:
+
+```text
+b12b993 feat: add dispatcher run result contract
 ```
 
 Deliverables:
@@ -231,6 +271,17 @@ Requirements:
 ✓ lifecycle fields
 ✓ dispatcher artifact generation
 ✓ clean feedback artifacts
+```
+
+Validation:
+
+```text
+✓ PowerShell parser check PASS
+✓ env_check PASS
+✓ safe self test PASS
+✓ run artifacts confirmed
+✓ git diff --check PASS
+✓ working tree clean
 ```
 
 Explicitly blocked:
@@ -297,11 +348,9 @@ ChatGPT Review
 Recommended next Codex task:
 
 ```text
-Implement Phase 3.0 Run Result Contract.
+Implement Phase 3.1 Local HTTP Bridge.
 
-No bridge yet.
+Phase 3.0 Run Result Contract is complete.
 
-No API yet.
-
-No MCP yet.
+Current status: Ready for Phase 3.1 Local HTTP Bridge.
 ```

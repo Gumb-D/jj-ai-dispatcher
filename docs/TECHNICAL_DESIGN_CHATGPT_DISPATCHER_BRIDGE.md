@@ -454,7 +454,7 @@ Phase 2 — Operator CLI
 Status: mostly completed
 
 Phase 3 — Result Contract and Local Bridge Foundation
-Status: next
+Status: in progress
 
 Phase 4 — ChatGPT Tool Integration
 Status: future
@@ -465,7 +465,7 @@ Do not jump directly to UI, scheduler, distributed agents, VM remote execution, 
 The correct next technical milestone is:
 
 ```text
-Phase 3.0 — Result Contract
+Phase 3.0 — Result Contract COMPLETE
 Phase 3.1 — Local Bridge Server
 Phase 3.2 — Dispatch API
 Phase 3.3 — Result API
@@ -527,6 +527,42 @@ dispatcher/inbox/codex-task.commit.txt
 Codex feedback must not rely only on console text.
 
 Dispatcher should generate machine-readable run artifacts.
+
+Phase 3.0 Run Result Contract is complete.
+
+Commit:
+
+```text
+b12b993 feat: add dispatcher run result contract
+```
+
+Delivered:
+
+```text
+dispatcher/runs/<task-id>/task.json
+dispatcher/runs/<task-id>/result.json
+dispatcher/runs/<task-id>/summary.md
+dispatcher/runs/<task-id>/codex-output.log
+dispatcher/runs/<task-id>/codex-error.log
+dispatcher/runs/<task-id>/git-diff.patch
+```
+
+Validation:
+
+```text
+PowerShell parser check PASS
+env_check PASS
+safe self test PASS
+run artifacts confirmed
+git diff --check PASS
+working tree clean
+```
+
+Current status:
+
+```text
+Ready for Phase 3.1 Local HTTP Bridge
+```
 
 Recommended run folder:
 
@@ -964,8 +1000,8 @@ NEXT
 Immediate sequence:
 
 ```text
-3.0 Run Result Contract
-3.1 Local Bridge Foundation
+3.0 Run Result Contract COMPLETE
+3.1 Local Bridge Foundation NEXT
 3.2 Dispatch API
 3.3 Result API
 3.4 Token Safety
@@ -1011,25 +1047,26 @@ Any feature that does not improve this loop should be delayed.
 Recommended next Codex task:
 
 ```text
-Implement Phase 3.0 Run Result Contract.
+Implement Phase 3.1 Local HTTP Bridge.
 
 Goal:
-Every dispatcher codex_task run must produce:
+Expose the completed dispatcher run result contract through a local-only bridge.
+
+Current foundation:
+- Phase 3.0 Run Result Contract COMPLETE
+- Commit: b12b993 feat: add dispatcher run result contract
 - dispatcher/runs/<task-id>/task.json
 - dispatcher/runs/<task-id>/result.json
 - dispatcher/runs/<task-id>/summary.md
-- stdout/stderr logs if available
-- git diff patch if changes exist
-
-Do not add HTTP bridge yet.
-Do not add API yet.
-First standardize result output.
+- dispatcher/runs/<task-id>/codex-output.log
+- dispatcher/runs/<task-id>/codex-error.log
+- dispatcher/runs/<task-id>/git-diff.patch
 ```
 
 Reason:
 
 ```text
-Before ChatGPT can receive feedback automatically, Dispatcher must produce a clean result artifact.
+Dispatcher now produces clean result artifacts and is ready for Phase 3.1 Local HTTP Bridge.
 ```
 
 ````markdown
