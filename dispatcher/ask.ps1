@@ -3,14 +3,18 @@ param(
     [string[]]$InputArgs,
 
     [Parameter(Mandatory = $false)]
-    [string]$Repo
+    [string]$Repo,
+
+    [Parameter(Mandatory = $false)]
+    [Alias("m")]
+    [string]$CommitMessage
 )
 
 $ErrorActionPreference = "Stop"
 
 function Show-Usage {
-    Write-Host 'Usage: .\dispatcher\ask.ps1 [repo-alias-or-path] "describe the Codex task"'
-    Write-Host '       .\dispatcher\ask.ps1 [-repo <alias-or-path>] "describe the Codex task"'
+    Write-Host 'Usage: .\dispatcher\ask.ps1 [repo-alias-or-path] "describe the Codex task" [-m "commit message"]'
+    Write-Host '       .\dispatcher\ask.ps1 [-repo <alias-or-path>] "describe the Codex task" [-m "commit message"]'
 }
 
 function Resolve-RepoTarget {
@@ -67,6 +71,11 @@ if ([string]::IsNullOrWhiteSpace($Prompt)) {
     exit 1
 }
 
+if ($PSBoundParameters.ContainsKey("CommitMessage") -and [string]::IsNullOrWhiteSpace($CommitMessage)) {
+    Write-Host "Commit message cannot be empty."
+    exit 1
+}
+
 $inboxDir = Join-Path $PSScriptRoot "inbox"
 if (-not (Test-Path -LiteralPath $inboxDir -PathType Container)) {
     New-Item -ItemType Directory -Path $inboxDir | Out-Null
@@ -79,6 +88,11 @@ if (-not [string]::IsNullOrWhiteSpace($repoInput)) {
 
 $promptPath = Join-Path $inboxDir "codex-task.txt"
 Set-Content -LiteralPath $promptPath -Value $Prompt
+
+$commitMessagePath = Join-Path $inboxDir "codex-task.commit.txt"
+if ($PSBoundParameters.ContainsKey("CommitMessage")) {
+    Set-Content -LiteralPath $commitMessagePath -Value $CommitMessage.Trim()
+}
 
 & (Join-Path $PSScriptRoot "run.ps1") codex_task
 exit $LASTEXITCODE
