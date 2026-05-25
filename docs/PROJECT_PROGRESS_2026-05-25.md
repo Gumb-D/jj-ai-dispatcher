@@ -159,23 +159,27 @@ to bridge + feedback architecture.
 Status:
 
 ```text
-IN PROGRESS
+COMPLETE
 ```
 
 Official order:
 
 ```text
 3.0 Run Result Contract COMPLETE
-3.1 Local Bridge Foundation NEXT
-3.2 Dispatch API
-3.3 Result API
-3.4 Token Safety
+3.1 Local Bridge Skeleton COMPLETE
+3.2 POST /dispatch COMPLETE
+3.3 Result API COMPLETE
+3.4 Token Hardening COMPLETE
 ```
 
-Phase 3.0 completion:
+Phase 3 completion:
 
 ```text
-Commit: b12b993 feat: add dispatcher run result contract
+3.0 Run Result Contract: b12b993 feat: add dispatcher run result contract
+3.1 Local Bridge Skeleton: 92b2c47 feat: add local bridge foundation skeleton
+3.2 POST /dispatch: d42802e feat: add bridge dispatch endpoint
+3.3 Result API: 6d14c6a feat: add bridge result api
+3.4 Token Hardening: 6cf283c feat: harden bridge token validation
 ```
 
 Delivered:
@@ -200,10 +204,29 @@ git diff --check PASS
 working tree clean
 ```
 
-Current status:
+Current local bridge endpoints:
 
 ```text
-Ready for Phase 3.1 Local HTTP Bridge
+GET /status
+POST /dispatch
+GET /runs/latest
+GET /runs/{taskId}
+```
+
+Bridge safety:
+
+```text
+✓ localhost only
+✓ token required by default
+✓ real token only in dispatcher/config.local.json
+✓ codex-only dispatch
+✓ single active task
+✓ no queue
+✗ MCP
+✗ tunnel
+✗ GitHub bridge
+✗ bot bridge
+✗ VM dispatch
 ```
 
 ---
@@ -348,9 +371,7 @@ ChatGPT Review
 Recommended next Codex task:
 
 ```text
-Implement Phase 3.1 Local HTTP Bridge.
+Phase 3 is complete.
 
-Phase 3.0 Run Result Contract is complete.
-
-Current status: Ready for Phase 3.1 Local HTTP Bridge.
+Next work should be selected from post-bridge integration or hardening backlog.
 ```

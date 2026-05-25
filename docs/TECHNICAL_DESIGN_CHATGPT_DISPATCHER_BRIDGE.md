@@ -454,7 +454,7 @@ Phase 2 — Operator CLI
 Status: mostly completed
 
 Phase 3 — Result Contract and Local Bridge Foundation
-Status: in progress
+Status: completed
 
 Phase 4 — ChatGPT Tool Integration
 Status: future
@@ -466,10 +466,10 @@ The correct next technical milestone is:
 
 ```text
 Phase 3.0 — Result Contract COMPLETE
-Phase 3.1 — Local Bridge Server
-Phase 3.2 — Dispatch API
-Phase 3.3 — Result API
-Phase 3.4 — Safety Token
+Phase 3.1 — Local Bridge Skeleton COMPLETE
+Phase 3.2 — POST /dispatch COMPLETE
+Phase 3.3 — Result API COMPLETE
+Phase 3.4 — Token Hardening COMPLETE
 ```
 
 ---
@@ -695,9 +695,19 @@ Bridge server should be small and local-first.
 Phase 3.1 foundation status:
 
 ```text
-Local bridge foundation.
+Phase 3 local bridge complete.
 Implemented endpoints: GET /status, POST /dispatch, GET /runs/latest, GET /runs/{taskId}.
 Run result endpoints are read-only and expose only existing result.json artifacts.
+```
+
+Phase 3 completion commits:
+
+```text
+3.0 Run Result Contract: b12b993 feat: add dispatcher run result contract
+3.1 Local Bridge Skeleton: 92b2c47 feat: add local bridge foundation skeleton
+3.2 POST /dispatch: d42802e feat: add bridge dispatch endpoint
+3.3 Result API: 6d14c6a feat: add bridge result api
+3.4 Token Hardening: 6cf283c feat: harden bridge token validation
 ```
 
 Current skeleton:
@@ -1059,17 +1069,17 @@ feedback loop + bridge architecture.
 Status:
 
 ```text
-NEXT
+COMPLETE
 ```
 
 Immediate sequence:
 
 ```text
 3.0 Run Result Contract COMPLETE
-3.1 Local Bridge Foundation NEXT
-3.2 Dispatch API
-3.3 Result API
-3.4 Token Safety
+3.1 Local Bridge Skeleton COMPLETE
+3.2 POST /dispatch COMPLETE
+3.3 Result API COMPLETE
+3.4 Token Hardening COMPLETE
 ```
 
 ---
@@ -1112,26 +1122,19 @@ Any feature that does not improve this loop should be delayed.
 Recommended next Codex task:
 
 ```text
-Implement Phase 3.1 Local HTTP Bridge.
+Phase 3 is complete.
 
-Goal:
-Expose the completed dispatcher run result contract through a local-only bridge.
-
-Current foundation:
-- Phase 3.0 Run Result Contract COMPLETE
-- Commit: b12b993 feat: add dispatcher run result contract
-- dispatcher/runs/<task-id>/task.json
-- dispatcher/runs/<task-id>/result.json
-- dispatcher/runs/<task-id>/summary.md
-- dispatcher/runs/<task-id>/codex-output.log
-- dispatcher/runs/<task-id>/codex-error.log
-- dispatcher/runs/<task-id>/git-diff.patch
+Current local bridge endpoints:
+- GET /status
+- POST /dispatch
+- GET /runs/latest
+- GET /runs/{taskId}
 ```
 
 Reason:
 
 ```text
-Dispatcher now produces clean result artifacts and is ready for Phase 3.1 Local HTTP Bridge.
+Dispatcher now has a local-only token-protected bridge over the run result contract.
 ```
 
 ````markdown
@@ -1509,11 +1512,19 @@ Phase 3 implementation MUST deliver:
 
 ✓ GET /runs/latest
 
+✓ GET /runs/{taskId}
+
 ✓ localhost only
 
-✓ token required
+✓ token required by default
+
+✓ real token only in dispatcher/config.local.json
+
+✓ codex-only dispatch
 
 ✓ single active task
+
+✓ no queue
 
 Phase 3 MUST NOT deliver:
 
