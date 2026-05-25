@@ -179,6 +179,41 @@ function Invoke-CodexTaskGitCommit {
 
     Write-Step "Git commit complete."
     Add-ResultOutput -Result $Result -Stdout "[dispatcher] Git commit complete."
+
+    $pushControlPath = Join-Path $DispatcherRoot "inbox\codex-task.push.txt"
+    if (-not (Test-Path -LiteralPath $pushControlPath -PathType Leaf)) {
+        return
+    }
+
+    $pushControl = (Get-Content -LiteralPath $pushControlPath -Raw).Trim().ToLowerInvariant()
+    if ($pushControl -notin @("true", "yes", "1")) {
+        $Result.ExitCode = 1
+        $message = "Invalid auto push control value in dispatcher/inbox/codex-task.push.txt. Use true, yes, or 1."
+        Add-ResultOutput -Result $Result -Stdout "[dispatcher] $message" -Stderr $message
+        return
+    }
+
+    Write-Step "Auto push enabled."
+    Add-ResultOutput -Result $Result -Stdout "[dispatcher] Auto push enabled."
+
+    if (-not $Config.safety.allowAutoPush) {
+        $Result.ExitCode = 1
+        $message = "Auto push disabled by config."
+        Add-ResultOutput -Result $Result -Stdout "[dispatcher] $message" -Stderr $message
+        return
+    }
+
+    $pushResult = Invoke-LoggedCommand -FilePath $Config.gitExe -ArgumentList @("push") -WorkingDirectory $RepoPath -LogFile $LogFile
+    Add-ResultOutput -Result $Result -Stdout $pushResult.Stdout -Stderr $pushResult.Stderr
+    if ($pushResult.ExitCode -ne 0) {
+        $Result.ExitCode = $pushResult.ExitCode
+        Add-ResultOutput -Result $Result -Stdout "[dispatcher] Git push failed."
+        Add-ResultOutput -Result $Result -Stdout $pushResult.Stderr
+        return
+    }
+
+    Write-Step "Git push complete."
+    Add-ResultOutput -Result $Result -Stdout "[dispatcher] Git push complete."
 }
 
 $projectRoot = Split-Path $PSScriptRoot -Parent

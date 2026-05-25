@@ -12,3 +12,8 @@ Optional target repo override:
 Optional commit message:
 - Create dispatcher/inbox/codex-task.commit.txt with one commit message.
 - Leave it absent to use: chore: codex task update.
+
+Optional auto push:
+- Create dispatcher/inbox/codex-task.push.txt with true, yes, or 1.
+- Auto push also requires safety.allowAutoPush to be true in config.
+- Leave it absent for no push.
