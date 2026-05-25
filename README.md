@@ -100,3 +100,5 @@ v0.2-worker-usability:
 - task descriptions
 - config check detail
 - documentation polish only
+
+Test note: README append check.
