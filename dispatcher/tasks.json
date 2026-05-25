@@ -17,6 +17,12 @@
     "command": "status --short --branch",
     "description": "Show concise Git branch and working tree status."
   },
+  "env_check": {
+    "name": "env_check",
+    "worker": "powershell",
+    "command": ".\\scripts\\env-check.ps1",
+    "description": "Validate local dispatcher environment and required worker scripts."
+  },
   "openclaw_restart": {
     "name": "openclaw_restart",
     "worker": "openclaw",
