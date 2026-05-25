@@ -2,6 +2,12 @@
   "defaultRepo": "D:\\path\\to\\your\\repo",
   "codexExe": "C:\\Users\\your-user\\AppData\\Roaming\\npm\\codex.cmd",
   "openclawExe": "C:\\path\\to\\openclaw.exe",
+  "bridge": {
+    "enabled": false,
+    "host": "127.0.0.1",
+    "port": 8787,
+    "requireToken": true
+  },
   "safety": {
     "allowAutoPush": false,
     "allowAutoDelete": false,

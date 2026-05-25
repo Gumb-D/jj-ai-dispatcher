@@ -4,6 +4,12 @@
   "openclawExe": "openclaw",
   "gitExe": "git",
   "logRetentionDays": 30,
+  "bridge": {
+    "enabled": false,
+    "host": "127.0.0.1",
+    "port": 8787,
+    "requireToken": true
+  },
   "safety": {
     "allowAutoPush": false,
     "allowAutoDelete": false,

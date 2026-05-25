@@ -692,18 +692,35 @@ This file is the easiest artifact for the user to paste back into ChatGPT during
 
 Bridge server should be small and local-first.
 
-Recommended endpoints:
+Phase 3.1 foundation status:
 
 ```text
-POST /dispatch
-GET  /status
-GET  /runs/latest
-GET  /runs/{taskId}
+Skeleton only.
+Implemented endpoint: GET /status.
+Dispatch execution and result APIs remain intentionally blocked.
+```
+
+Current skeleton:
+
+```text
+dispatcher/bridge.ps1
+```
+
+Current endpoint:
+
+```text
+GET /status
 ```
 
 ---
 
 ### 13.1 POST /dispatch
+
+Status:
+
+```text
+Not implemented in Phase 3.1 skeleton.
+```
 
 Purpose:
 
@@ -753,7 +770,8 @@ Response:
   "dispatcherRoot": "D:\\dev\\projects\\jj-ai-dispatcher",
   "defaultWorker": "codex",
   "autoPush": false,
-  "availableAliases": ["self", "toonflow", "pr"]
+  "bridgeEnabled": true,
+  "taskState": "idle"
 }
 ```
 
@@ -856,7 +874,7 @@ Suggested config:
   "defaultRepo": "D:\\dev\\projects\\jj-ai-dispatcher",
   "autoPush": false,
   "bridge": {
-    "enabled": true,
+    "enabled": false,
     "host": "127.0.0.1",
     "port": 8787,
     "requireToken": true
