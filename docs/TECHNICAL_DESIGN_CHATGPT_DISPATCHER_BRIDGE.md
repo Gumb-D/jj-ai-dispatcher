@@ -695,8 +695,8 @@ Bridge server should be small and local-first.
 Phase 3.1 foundation status:
 
 ```text
-Skeleton only.
-Implemented endpoint: GET /status.
+Local bridge foundation.
+Implemented endpoints: GET /status, POST /dispatch.
 Dispatch execution and result APIs remain intentionally blocked.
 ```
 
@@ -710,6 +710,7 @@ Current endpoint:
 
 ```text
 GET /status
+POST /dispatch
 ```
 
 ---
@@ -719,7 +720,8 @@ GET /status
 Status:
 
 ```text
-Not implemented in Phase 3.1 skeleton.
+Implemented as single-active codex_task bridge.
+No queue, result API, worker pool, MCP, or tunnel.
 ```
 
 Purpose:
@@ -746,9 +748,10 @@ Response:
 ```json
 {
   "accepted": true,
-  "taskId": "20260525-153012",
   "status": "running",
-  "resultPath": "dispatcher/runs/20260525-153012/result.json"
+  "worker": "codex",
+  "taskState": "running",
+  "processId": 12345
 }
 ```
 

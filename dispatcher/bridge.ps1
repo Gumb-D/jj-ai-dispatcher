@@ -11,6 +11,8 @@ $configLoaderPath = Join-Path $projectRoot "scripts\load-config.ps1"
 $bridgeState = [pscustomobject]@{
     TaskState = "idle"
     AllowedTaskStates = @("idle", "running")
+    ActiveProcess = $null
+    ActiveStartedAt = $null
 }
 
 function Write-BridgeStep {
@@ -62,6 +64,180 @@ function Test-BridgeToken {
     return -not [string]::IsNullOrWhiteSpace($token)
 }
 
+function Update-BridgeTaskState {
+    param([pscustomobject]$State)
+
+    if ($State.TaskState -eq "running" -and $null -ne $State.ActiveProcess -and $State.ActiveProcess.HasExited) {
+        $State.TaskState = "idle"
+        $State.ActiveProcess = $null
+        $State.ActiveStartedAt = $null
+    }
+}
+
+function Read-JsonRequestBody {
+    param([System.Net.HttpListenerRequest]$Request)
+
+    $reader = [System.IO.StreamReader]::new($Request.InputStream, $Request.ContentEncoding)
+    try {
+        $body = $reader.ReadToEnd()
+    }
+    finally {
+        $reader.Close()
+    }
+
+    if ([string]::IsNullOrWhiteSpace($body)) {
+        throw "Request body must be JSON."
+    }
+
+    return $body | ConvertFrom-Json
+}
+
+function Resolve-RepoTarget {
+    param([string]$Value)
+
+    if ([string]::IsNullOrWhiteSpace($Value)) {
+        return ""
+    }
+
+    if ($Value -eq "self") {
+        return $projectRoot
+    }
+
+    return $Value
+}
+
+function Write-DispatchInboxFiles {
+    param([pscustomobject]$Dispatch)
+
+    $inboxDir = Join-Path $dispatcherRoot "inbox"
+    if (-not (Test-Path -LiteralPath $inboxDir -PathType Container)) {
+        New-Item -ItemType Directory -Path $inboxDir | Out-Null
+    }
+
+    $promptPath = Join-Path $inboxDir "codex-task.txt"
+    Set-Content -LiteralPath $promptPath -Value $Dispatch.task -Encoding UTF8
+
+    $repoPath = Join-Path $inboxDir "codex-task.repo.txt"
+    if ($Dispatch.PSObject.Properties.Name.Contains("repo") -and -not [string]::IsNullOrWhiteSpace($Dispatch.repo)) {
+        Set-Content -LiteralPath $repoPath -Value (Resolve-RepoTarget -Value $Dispatch.repo) -Encoding UTF8
+    }
+    else {
+        Remove-Item -LiteralPath $repoPath -ErrorAction SilentlyContinue
+    }
+
+    $commitPath = Join-Path $inboxDir "codex-task.commit.txt"
+    if ($Dispatch.PSObject.Properties.Name.Contains("commitMessage") -and -not [string]::IsNullOrWhiteSpace($Dispatch.commitMessage)) {
+        Set-Content -LiteralPath $commitPath -Value $Dispatch.commitMessage.Trim() -Encoding UTF8
+    }
+    else {
+        Remove-Item -LiteralPath $commitPath -ErrorAction SilentlyContinue
+    }
+}
+
+function Start-DispatcherCodexTask {
+    $runPath = Join-Path $dispatcherRoot "run.ps1"
+    $arguments = @(
+        "-NoProfile",
+        "-ExecutionPolicy", "Bypass",
+        "-File", "`"$runPath`"",
+        "codex_task"
+    )
+
+    return Start-Process `
+        -FilePath "pwsh" `
+        -ArgumentList $arguments `
+        -WorkingDirectory $projectRoot `
+        -WindowStyle Hidden `
+        -PassThru
+}
+
+function Invoke-DispatchRequest {
+    param(
+        [System.Net.HttpListenerContext]$Context,
+        [pscustomobject]$State
+    )
+
+    $request = $Context.Request
+    $response = $Context.Response
+
+    if ($State.TaskState -ne "idle") {
+        Write-JsonResponse -Response $response -StatusCode 409 -Body ([ordered]@{
+            accepted = $false
+            status = "busy"
+            taskState = $State.TaskState
+            error = "A dispatcher task is already running."
+        })
+        return
+    }
+
+    try {
+        $dispatch = Read-JsonRequestBody -Request $request
+    }
+    catch {
+        Write-JsonResponse -Response $response -StatusCode 400 -Body ([ordered]@{
+            accepted = $false
+            status = "invalid_request"
+            error = $_.Exception.Message
+        })
+        return
+    }
+
+    $worker = if ($dispatch.PSObject.Properties.Name.Contains("worker")) { [string]$dispatch.worker } else { "" }
+    if ($worker -ne "codex") {
+        Write-JsonResponse -Response $response -StatusCode 400 -Body ([ordered]@{
+            accepted = $false
+            status = "invalid_worker"
+            error = "Only worker=codex is supported."
+        })
+        return
+    }
+
+    if (-not $dispatch.PSObject.Properties.Name.Contains("task") -or [string]::IsNullOrWhiteSpace($dispatch.task)) {
+        Write-JsonResponse -Response $response -StatusCode 400 -Body ([ordered]@{
+            accepted = $false
+            status = "invalid_task"
+            error = "Task cannot be empty."
+        })
+        return
+    }
+
+    if ($dispatch.PSObject.Properties.Name.Contains("commitMessage") -and [string]::IsNullOrWhiteSpace($dispatch.commitMessage)) {
+        Write-JsonResponse -Response $response -StatusCode 400 -Body ([ordered]@{
+            accepted = $false
+            status = "invalid_commit_message"
+            error = "Commit message cannot be empty if provided."
+        })
+        return
+    }
+
+    try {
+        Write-DispatchInboxFiles -Dispatch $dispatch
+        $process = Start-DispatcherCodexTask
+        $State.TaskState = "running"
+        $State.ActiveProcess = $process
+        $State.ActiveStartedAt = (Get-Date).ToString("o")
+    }
+    catch {
+        $State.TaskState = "idle"
+        $State.ActiveProcess = $null
+        $State.ActiveStartedAt = $null
+        Write-JsonResponse -Response $response -StatusCode 500 -Body ([ordered]@{
+            accepted = $false
+            status = "failed"
+            error = $_.Exception.Message
+        })
+        return
+    }
+
+    Write-JsonResponse -Response $response -StatusCode 202 -Body ([ordered]@{
+        accepted = $true
+        status = "running"
+        worker = "codex"
+        taskState = $State.TaskState
+        processId = $process.Id
+    })
+}
+
 function Invoke-BridgeRequest {
     param(
         [System.Net.HttpListenerContext]$Context,
@@ -74,6 +250,8 @@ function Invoke-BridgeRequest {
     $request = $Context.Request
     $response = $Context.Response
 
+    Update-BridgeTaskState -State $State
+
     if (-not (Test-BridgeToken -Request $request -RequireToken $RequireToken)) {
         Write-JsonResponse -Response $response -StatusCode 401 -Body ([ordered]@{
             status = "unauthorized"
@@ -82,10 +260,15 @@ function Invoke-BridgeRequest {
         return
     }
 
+    if ($request.HttpMethod -eq "POST" -and $request.Url.AbsolutePath -eq "/dispatch") {
+        Invoke-DispatchRequest -Context $Context -State $State
+        return
+    }
+
     if ($request.HttpMethod -ne "GET" -or $request.Url.AbsolutePath -ne "/status") {
         Write-JsonResponse -Response $response -StatusCode 404 -Body ([ordered]@{
             status = "not_found"
-            error = "Only GET /status is available in this bridge skeleton"
+            error = "Only GET /status and POST /dispatch are available."
         })
         return
     }
