@@ -189,7 +189,27 @@ Expected accepted response:
 }
 ```
 
-The dispatch response does not include a `taskId`. The bridge starts `dispatcher/run.ps1 codex_task` in the background, and that run creates its own ID under `dispatcher/runs/<task-id>/`. Use `GET /runs/latest` after completion to find the latest result and its `taskId`.
+`POST /dispatch` only confirms that the task was accepted and started. It returns `accepted = true` and `status = "running"` while the Codex worker continues in the background.
+
+The dispatch response does not include a `taskId`. The bridge starts `dispatcher/run.ps1 codex_task` in the background, and that run creates its own ID under `dispatcher/runs/<task-id>/`. The result artifact may not exist immediately after dispatch.
+
+After dispatching, poll `GET /status` until `taskState` returns to `idle`:
+
+```powershell
+$token = "replace-with-your-local-token"
+
+do {
+  Start-Sleep -Seconds 5
+  $status = Invoke-RestMethod `
+    -Method Get `
+    -Uri "http://127.0.0.1:8787/status" `
+    -Headers @{ "X-Dispatcher-Token" = $token }
+
+  $status.taskState
+} while ($status.taskState -ne "idle")
+```
+
+Then call `GET /runs/latest` to find the completed run result and its `taskId`.
 
 ### GET /runs/latest
 
@@ -202,6 +222,8 @@ Invoke-RestMethod `
 ```
 
 The response is the latest `result.json`. It includes fields such as `taskId`, `status`, `repo`, `worker`, `filesChanged`, `commit`, `workingTreeClean`, `summary`, `logs`, `needsReview`, and `reviewHints`.
+
+`/runs/latest` may return `not_found` while a task is still running. This is expected when the worker has not written `result.json` yet. Poll `GET /status` until `taskState = "idle"`, then retry `GET /runs/latest`.
 
 ### GET /runs/{taskId}
 
@@ -246,6 +268,19 @@ The run directory contains:
 
 Run artifacts are ignored by Git through `dispatcher/runs/`.
 
+## Phase 4.1 Smoke Test Results
+
+Phase 4.1 local operator smoke testing confirmed:
+
+- `GET /status`: PASS
+- `GET /runs/latest`: PASS
+- `GET /runs/{taskId}`: PASS
+- `POST /dispatch`: PASS
+- Busy protection: PASS
+- Result artifacts: PASS
+
+The smoke test also confirmed that a freshly accepted dispatch can be running before a result artifact exists. Operators should treat temporary `/runs/latest` `not_found` responses during active execution as normal and continue polling `GET /status`.
+
 ## Troubleshooting
 
 Token missing:
@@ -281,7 +316,7 @@ Task already running:
 No latest run:
 
 - Symptom: HTTP `404`, `status = "not_found"`, `error = "No run results found."`
-- Fix: run a dispatch first, then query after the worker has created a result.
+- Fix: run a dispatch first. If `GET /status` shows `taskState = "running"`, wait and poll status until `taskState = "idle"`, then query `GET /runs/latest` again.
 
 Codex execution failure:
 
