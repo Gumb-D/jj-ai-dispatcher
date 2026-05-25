@@ -106,3 +106,5 @@ Test note: README append check.
 Phase 2A.1 validation note: dispatcher README append path verified.
 
 UX validation note: README append flow stays visible and low-friction.
+
+Repo alias validation note: dispatcher alias resolution path verified.
