@@ -1,315 +1,87 @@
 # JJ AI Dispatcher
 
-## Vision
+## Purpose
 
-JJ AI Dispatcher is a local orchestration framework where ChatGPT acts as the brain, while local execution tools act as workers.
+Local dispatcher for routing small controlled tasks to local AI workers and utility scripts.
+It reduces manual copy/paste between ChatGPT, Codex, Co-Claw/OpenClaw, and Git.
 
-The goal is to reduce repetitive copy-paste between ChatGPT, Codex, OpenClaw, PowerShell, and Git.
+## Current Status
 
-This project is designed for a Windows-first private development environment.
+v0.1-local-operator:
+- stable local operator mode
+- backed up to GitHub
+- no API server
+- no UI app
+- no autonomous routing
 
-## Target Environment
+## Repository
 
-- Windows 11
-- PowerShell 7
-- VSCode
-- OpenClaw 2026.3.13
-- Codex CLI
-- Private repo only
+Local:
+D:\dev\projects\jj-ai-dispatcher
 
-## Architecture
+Remote:
+https://github.com/Gumb-D/jj-ai-dispatcher.git
 
-```text
-JJ
-↓
-ChatGPT
-Brain / planner / reviewer
-↓
-Local Dispatcher
-Task router
-↓
-Codex / OpenClaw / PowerShell / Git
-Workers
-↓
-Execution output
-↓
-ChatGPT reviews and decides next action
-```
+## Quick Start
 
-## Brain vs Worker Model
-
-### ChatGPT
-
-ChatGPT is the brain.
-
-Responsibilities:
-
-- Planning
-- Reasoning
-- Review
-- Task generation
-- Safety checking
-- Deciding the next action
-
-ChatGPT should not blindly execute destructive actions. It should create clear tasks, review outputs, and decide whether another worker action is needed.
-
-### Codex
-
-Codex is the coding worker.
-
-Responsibilities:
-
-- Code changes
-- Repo inspection
-- Git operations
-- Safe refactoring
-- Test execution
-- Preparing commits when explicitly requested
-
-Codex should not auto-push unless explicitly instructed.
-
-### OpenClaw
-
-OpenClaw is the agent/runtime worker.
-
-Responsibilities:
-
-- Agent tasks
-- Automation
-- WhatsApp-related runtime work
-- Runtime validation
-- Gateway health checks
-- OpenClaw service logs
-
-### PowerShell
-
-PowerShell is the system execution worker.
-
-Responsibilities:
-
-- Local command execution
-- File inspection
-- Process inspection
-- Script execution
-- Windows-first automation
-
-### Git
-
-Git is the version-control worker.
-
-Responsibilities:
-
-- Status checks
-- Diff checks
-- Branch checks
-- Commit preparation
-
-Git tasks must not push or delete branches unless explicitly requested.
-
-### Dispatcher
-
-The dispatcher is the orchestration layer.
-
-Responsibilities:
-
-- Load task definitions
-- Route tasks to the correct worker
-- Execute commands
-- Capture stdout and stderr
-- Save logs
-- Print clean summaries
-
-## Project Structure
-
-```text
-jj-ai-dispatcher/
-│
-├─ README.md
-│
-├─ dispatcher/
-│  ├─ run.ps1
-│  ├─ tasks.json
-│  ├─ config.json
-│  └─ logs/
-│
-├─ prompts/
-│  ├─ codex-safe-commit.md
-│  ├─ codex-secure-scan.md
-│  ├─ openclaw-health-check.md
-│  ├─ openclaw-restart.md
-│  ├─ repo-cleanup.md
-│  └─ deployment-check.md
-│
-├─ scripts/
-│  ├─ run-codex-task.ps1
-│  ├─ run-openclaw-task.ps1
-│  ├─ git-status.ps1
-│  └─ openclaw-logs.ps1
-│
-└─ examples/
-   ├─ example-codex-output.md
-   └─ example-openclaw-output.md
-```
-
-## Setup
-
-Open PowerShell 7 in the project root.
-
+Run:
 ```powershell
-pwsh
+.\menu.ps1
 ```
 
-Optional: allow local script execution for the current process only.
-
+Or directly:
 ```powershell
-Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass
-```
-
-Check required tools:
-
-```powershell
-pwsh --version
-git --version
-codex --version
-openclaw --version
-```
-
-Update `dispatcher/config.json` before use.
-
-Important fields:
-
-```json
-{
-  "defaultRepo": "D:\\dev\\projects\\your-private-repo",
-  "codexExe": "codex",
-  "openclawExe": "openclaw",
-  "gitExe": "git",
-  "logRetentionDays": 30
-}
-```
-
-## Usage Examples
-
-Run a safe commit review using Codex:
-
-```powershell
+.\dispatcher\run.ps1 env_check
 .\dispatcher\run.ps1 safe_commit
-```
-
-Run a security scan using Codex:
-
-```powershell
 .\dispatcher\run.ps1 secure_scan
-```
-
-Check Git status:
-
-```powershell
-.\dispatcher\run.ps1 git_status
-```
-
-Restart OpenClaw gateway:
-
-```powershell
-.\dispatcher\run.ps1 openclaw_restart
-```
-
-Read OpenClaw logs:
-
-```powershell
-.\dispatcher\run.ps1 openclaw_logs
-```
-
-Run OpenClaw health check:
-
-```powershell
-.\dispatcher\run.ps1 health_check
-```
-
-Run repo cleanup review:
-
-```powershell
 .\dispatcher\run.ps1 repo_cleanup
 ```
 
-## Workflow
+## Configuration
 
-Recommended operating loop:
+- `dispatcher/config.json` = shared/default config
+- `dispatcher/config.local.json` = machine-specific override
+- `dispatcher/config.local.json` is ignored by Git
+- `dispatcher/config.local.example.json` is the template
 
-```text
-1. JJ asks ChatGPT for a task.
-2. ChatGPT generates or selects a dispatcher task.
-3. JJ runs dispatcher locally.
-4. Dispatcher routes execution to Codex, OpenClaw, PowerShell, or Git.
-5. Dispatcher saves logs.
-6. JJ sends output back to ChatGPT.
-7. ChatGPT reviews and decides the next action.
-```
-
-## Safety Rules
-
-The dispatcher must not perform these actions unless explicitly requested:
-
-- Auto push
-- Auto delete files
-- Auto modify system settings
-- Auto kill unknown processes
-- Auto overwrite repo configuration
-- Auto expose secrets
-- Auto commit runtime credentials
-
-## Recommended Expansion Path
-
-### Phase 1: Local command router
-
-Current version.
-
-- Manual task trigger
-- Local logs
-- Codex/OpenClaw/Git/PowerShell routing
-
-### Phase 2: ChatGPT task package format
-
-Standardize task handoff format:
-
+Example `config.local.json`:
 ```json
 {
-  "task": "safe_commit",
-  "repo": "D:\\dev\\projects\\repo",
-  "instruction": "Review changes and prepare a safe commit only."
+  "defaultRepo": "D:\\path\\to\\target\\repo",
+  "codexExe": "C:\\path\\to\\codex.exe",
+  "openclawExe": "C:\\Program Files\\Co-Claw\\Co-Claw.exe",
+  "safety": {
+    "allowAutoPush": false,
+    "allowAutoDelete": false,
+    "allowSystemSettingModification": false
+  }
 }
 ```
 
-### Phase 3: Local inbox
+## Available Tasks
 
-Create:
+- env_check
+- safe_commit
+- secure_scan
+- repo_cleanup
+- git_status
 
-```text
-dispatcher/inbox/
-dispatcher/outbox/
-```
+## Safety Rules
 
-ChatGPT writes a task file. Dispatcher consumes it.
+- config.local.json must not be committed
+- logs must not be committed
+- no auto push unless explicitly enabled
+- no auto delete unless explicitly enabled
+- no system setting modification unless explicitly enabled
 
-### Phase 4: Worker result summarizer
+## Development Log
 
-Add automatic summary extraction from logs.
+See [docs/development-log.md](docs/development-log.md).
 
-### Phase 5: Local UI
+## Next Milestone
 
-Build a small web UI:
-
-- Task selection
-- Repo selector
-- Run button
-- Logs viewer
-- Copy summary to ChatGPT
-
-### Phase 6: Controlled automation
-
-Add guarded actions:
-
-- Confirm before commit
-- Confirm before OpenClaw restart
-- Confirm before repo cleanup
-- Confirm before Git push
+v0.2-worker-usability:
+- menu loop improvement
+- task descriptions
+- config check detail
+- documentation polish only
