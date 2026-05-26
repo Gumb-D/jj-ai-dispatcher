@@ -6,6 +6,12 @@ This runbook records the confirmed working startup procedure for connecting Chat
 
 This is a controlled feasibility procedure. It does not authorize production exposure, new MCP tools, authentication changes, auto-dispatch, auto-review, queueing, scheduling, autonomous loops, or raw Dispatcher bridge exposure.
 
+For the full install and three-terminal startup sequence, see:
+
+```text
+docs/phase-7-4-chatgpt-mcp-engine-startup-runbook.md
+```
+
 ## Confirmed Working Command
 
 ```powershell
@@ -22,14 +28,14 @@ Without `--host-header="localhost:8790"`, connector creation failed or ngrok sho
 
 ## Exact Startup Sequence
 
-Terminal 1:
+Terminal 1 - MCP HTTP adapter:
 
 ```powershell
 cd D:\dev\projects\jj-ai-dispatcher
 npm run mcp:http
 ```
 
-Terminal 2:
+Terminal 2 - ngrok tunnel:
 
 ```powershell
 ngrok http 8790 --host-header="localhost:8790"
@@ -110,12 +116,16 @@ No extra tools are approved.
 - do not store or commit ngrok tokens
 - do not use this as unattended production operation
 
+The full engine startup also requires the Dispatcher bridge on `127.0.0.1:8787`, but that bridge must remain local and must never be tunneled.
+
 ## Troubleshooting
 
 - ngrok auth token may be required before tunnels work.
 - ngrok version must be `3.20.0` or newer.
 - Qi-AnXin Tianqing may quarantine ngrok; whitelist WinGet temp/package folders only if approved.
 - if forbidden occurs, confirm `--host-header="localhost:8790"` is present.
+- if tools are missing, confirm the ChatGPT MCP Server URL ends with `/mcp`.
+- if latest result is still running, wait and review before dispatching again.
 - check ngrok inspector at:
 
   ```text

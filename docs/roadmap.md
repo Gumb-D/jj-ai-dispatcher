@@ -88,11 +88,56 @@ Phase 7 does not authorize:
 
 - 7.0 Connectivity finding record
 - 7.1 Remote MCP transport feasibility spike
-- 7.2 Transport adapter design
-- 7.3 Local-safe adapter implementation
-- 7.4 HTTPS exposure strategy review
-- 7.5 ChatGPT connector manual validation
+- 7.2 Transport adapter design and local HTTP/SSE adapter implementation - COMPLETE
+- 7.3 ChatGPT connector ngrok runbook with host-header rewrite - COMPLETE
+- 7.4 ChatGPT MCP engine startup runbook - COMPLETE
+- 7.5 ChatGPT connector manual validation - COMPLETE
 - 7.6 Security review and operator go/no-go
+
+## Phase 7 Current Operational Status
+
+End-to-end ChatGPT MCP integration has been achieved for controlled feasibility testing.
+
+Validated working chain:
+
+```text
+ChatGPT
+  |
+  v
+Custom MCP Connector / App
+  |
+  v
+ngrok HTTPS tunnel
+  |
+  v
+local MCP HTTP adapter on 127.0.0.1:8790
+  |
+  v
+Dispatcher bridge on 127.0.0.1:8787
+  |
+  v
+Codex worker
+  |
+  v
+Git commit
+```
+
+Validated ngrok command:
+
+```powershell
+ngrok http 8790 --host-header="localhost:8790"
+```
+
+Operational runbooks:
+
+- `docs/phase-7-3-chatgpt-connector-ngrok-runbook.md`
+- `docs/phase-7-4-chatgpt-mcp-engine-startup-runbook.md`
+
+Remaining Phase 7 focus:
+
+- keep No Auth limited to controlled feasibility testing
+- complete security review and operator go/no-go
+- decide any durable HTTPS/auth strategy before broader use
 
 ## ADR-0002 ChatGPT MCP Transport Compatibility
 
