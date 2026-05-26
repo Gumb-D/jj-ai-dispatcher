@@ -9,7 +9,14 @@ This addresses the ChatGPT connector transport mismatch:
 - current JJ Dispatcher MCP: local stdio MCP plus protected localhost bridge
 - ChatGPT custom connector: MCP Server URL using HTTPS/SSE or streamable HTTP style transport
 
-This adapter is local feasibility infrastructure only. It does not expose the Dispatcher bridge publicly and does not make the system ready to paste a URL into ChatGPT.
+This adapter is local feasibility infrastructure only. It does not expose the Dispatcher bridge publicly.
+
+Confirmed connector finding:
+
+- ChatGPT can reach this adapter through an HTTPS ngrok URL when ngrok rewrites the Host header to the local adapter host.
+- The working public MCP endpoint pattern is `https://<ngrok-domain>/mcp`.
+- The local MCP adapter remains `http://127.0.0.1:8790/mcp`.
+- This remains controlled feasibility testing, not production exposure.
 
 ## Local Start
 
@@ -80,11 +87,25 @@ The adapter supports No Auth only for local feasibility testing. It is not a pub
 
 ChatGPT requires an HTTPS MCP Server URL. The default local adapter URL is HTTP localhost and is not directly usable by ChatGPT.
 
+Confirmed feasibility command:
+
+```powershell
+ngrok http 8790 --host-header="localhost:8790"
+```
+
+Why this works:
+
+- ChatGPT reaches the ngrok HTTPS URL.
+- ngrok forwards `/mcp` traffic to the local MCP HTTP adapter on port `8790`.
+- the Host header rewrite avoids forbidden or host mismatch behavior from the localhost-protected MCP adapter.
+
 Do not tunnel raw Dispatcher bridge.
 
 Do not expose `127.0.0.1:8787` publicly.
 
-Do not expose this adapter publicly until an HTTPS exposure strategy, authentication policy, and operator go/no-go review are completed.
+Expose port `8790` only for controlled feasibility testing, and stop ngrok after the test.
+
+Do not expose this adapter broadly until an HTTPS exposure strategy, authentication policy, and operator go/no-go review are completed.
 
 ## Remaining Work Before ChatGPT Connector Use
 
@@ -92,9 +113,18 @@ Before pasting any URL into ChatGPT Connector:
 
 - verify exact ChatGPT MCP transport expectations
 - decide whether ChatGPT requires Streamable HTTP, legacy SSE, or both
-- design reviewed HTTPS exposure
+- use the reviewed ngrok host-header procedure for feasibility only
+- design durable reviewed HTTPS exposure for any longer-lived use
 - decide authentication requirements
 - preserve bridge token protection
 - avoid exposing the raw Dispatcher bridge
 - validate the connector manually with operator oversight
 - complete security review and operator go/no-go
+
+## Operator Runbook
+
+See:
+
+```text
+docs/phase-7-3-chatgpt-connector-ngrok-runbook.md
+```
