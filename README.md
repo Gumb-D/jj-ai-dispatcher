@@ -70,6 +70,56 @@ Current role split:
 - Dispatcher owns orchestration and git operations
 - Codex owns file edits
 
+## Dispatcher Operator Workflow
+
+Current Phase 4 role model:
+
+- ChatGPT = Brain
+- Dispatcher = Execution Controller
+- Codex = Coding Worker
+- Git = Control Point
+
+Current safe local workflow:
+
+```powershell
+.\dispatcher\bridge.ps1
+.\scripts\bridge-status.ps1
+.\scripts\bridge-dispatch.ps1 -Repo self -Worker codex -Task "describe task" -CommitMessage "docs: describe change"
+.\scripts\bridge-wait-latest.ps1
+.\scripts\bridge-latest.ps1
+```
+
+Operator sequence:
+
+- Start the local bridge with `.\dispatcher\bridge.ps1`.
+- Check status with `.\scripts\bridge-status.ps1`.
+- Dispatch with `.\scripts\bridge-dispatch.ps1`.
+- Wait for and read the latest result with `.\scripts\bridge-wait-latest.ps1`.
+- Review latest result again if needed with `.\scripts\bridge-latest.ps1`.
+- Paste the result back to ChatGPT for review before issuing another task.
+
+Operator documentation index:
+
+- [docs/local-bridge-operator-guide.md](docs/local-bridge-operator-guide.md)
+- [docs/chatgpt-operator-workflow.md](docs/chatgpt-operator-workflow.md)
+- [docs/operator-run-review-template.md](docs/operator-run-review-template.md)
+- [docs/session-handover-phase-4.md](docs/session-handover-phase-4.md)
+
+Safety reminder:
+
+- Localhost only.
+- Token required.
+- Token only in `dispatcher/config.local.json`.
+- No MCP yet.
+- No tunnel yet.
+- No remote exposure.
+
+Current baseline:
+
+- Phase 4.4 completed.
+- Current remote baseline: `main @ 9446e49`.
+- Stable tag: `v0.3-phase3-bridge`.
+
 ## Custom Codex Task
 
 Use codex-task.repo.txt when the target repo is not config.defaultRepo.
