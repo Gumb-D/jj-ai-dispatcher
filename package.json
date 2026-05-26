@@ -1,0 +1,33 @@
+{
+  "name": "jj-ai-dispatcher",
+  "version": "1.0.0",
+  "description": "Local dispatcher for routing small controlled tasks to local AI workers and utility scripts. It reduces manual copy/paste between ChatGPT, Codex, Co-Claw/OpenClaw, and Git.",
+  "type": "module",
+  "main": "mcp/server/index.js",
+  "bin": {
+    "jj-ai-dispatcher-mcp": "mcp/server/index.js"
+  },
+  "directories": {
+    "doc": "docs",
+    "example": "examples"
+  },
+  "scripts": {
+    "mcp:start": "node mcp/server/index.js",
+    "build": "node --check mcp/server/index.js && node --check mcp/server/server.js && node --check mcp/server/bridgeClient.js && node --check mcp/server/errors.js && node --check mcp/config/loadConfig.js && node --check mcp/tools/index.js && node --check mcp/tools/schemas.js"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Gumb-D/jj-ai-dispatcher.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "bugs": {
+    "url": "https://github.com/Gumb-D/jj-ai-dispatcher/issues"
+  },
+  "homepage": "https://github.com/Gumb-D/jj-ai-dispatcher#readme",
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.29.0",
+    "zod": "^4.4.3"
+  }
+}
