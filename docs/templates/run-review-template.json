@@ -1,0 +1,12 @@
+{
+  "taskId": "",
+  "classification": "needs_followup",
+  "subStatus": "needs_manual_check",
+  "reviewedAt": "",
+  "reviewedBy": "chatgpt/operator",
+  "acceptedCommit": "",
+  "filesReviewed": [],
+  "validationSummary": [],
+  "riskNotes": [],
+  "nextAction": "manual_review"
+}
