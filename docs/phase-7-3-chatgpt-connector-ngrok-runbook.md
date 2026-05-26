@@ -100,9 +100,11 @@ No extra tools are approved.
 
 - expose port `8790` only
 - never expose `8787`
+- expose `8790` adapter only
 - never tunnel raw Dispatcher bridge
 - keep No Auth only for controlled feasibility testing
-- stop ngrok after test
+- stop ngrok after use
+- no extra MCP tools
 - do not add tools beyond the approved four
 - do not remove Dispatcher bridge token protection
 - do not store or commit ngrok tokens
