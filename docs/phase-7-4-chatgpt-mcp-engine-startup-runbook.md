@@ -30,6 +30,8 @@ Git commit
 
 This runbook does not add tools, change authentication, expose the raw Dispatcher bridge, or authorize unattended operation.
 
+For daily/operator checklist use after this startup path is already validated, see `docs/phase-7-5-chatgpt-mcp-operations-checklist.md`.
+
 ## Prerequisites
 
 - Node/npm installed.

@@ -10,7 +10,7 @@ It reduces manual copy/paste between ChatGPT, Codex, Co-Claw/OpenClaw, and Git.
 v0.1-local-operator:
 - stable local operator mode
 - backed up to GitHub
-- no API server
+- ChatGPT MCP feasibility path validated for controlled operator testing
 - no UI app
 - no autonomous routing
 
@@ -104,15 +104,17 @@ Operator documentation index:
 - [docs/chatgpt-operator-workflow.md](docs/chatgpt-operator-workflow.md)
 - [docs/operator-run-review-template.md](docs/operator-run-review-template.md)
 - [docs/session-handover-phase-4.md](docs/session-handover-phase-4.md)
+- [docs/phase-7-5-chatgpt-mcp-operations-checklist.md](docs/phase-7-5-chatgpt-mcp-operations-checklist.md)
 
 Safety reminder:
 
 - Localhost only.
 - Token required.
 - Token only in `dispatcher/config.local.json`.
-- No MCP yet.
-- No tunnel yet.
-- No remote exposure.
+- MCP remains limited to the approved Dispatcher tool surface.
+- Do not expose the raw Dispatcher bridge on `127.0.0.1:8787`.
+- Only the MCP HTTP adapter on `127.0.0.1:8790` may be tunneled for controlled ChatGPT feasibility testing.
+- Stop ngrok when not actively testing.
 
 Current baseline:
 

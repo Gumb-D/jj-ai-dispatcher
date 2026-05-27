@@ -2,9 +2,9 @@
 
 ## Current Status Summary
 
-Phase 6 is COMPLETE.
+Phase 7.5 is COMPLETE.
 
-The Production Operator Package is validated and available for controlled daily operator use.
+The ChatGPT MCP engine is validated end-to-end for controlled feasibility testing, and the daily operations checklist is available.
 
 Still valid from the completed Phase 5 and Phase 6 work:
 
@@ -91,7 +91,7 @@ Phase 7 does not authorize:
 - 7.2 Transport adapter design and local HTTP/SSE adapter implementation - COMPLETE
 - 7.3 ChatGPT connector ngrok runbook with host-header rewrite - COMPLETE
 - 7.4 ChatGPT MCP engine startup runbook - COMPLETE
-- 7.5 ChatGPT connector manual validation - COMPLETE
+- 7.5 ChatGPT MCP operations checklist - COMPLETE
 - 7.6 Security review and operator go/no-go
 
 ## Phase 7 Current Operational Status
@@ -132,6 +132,7 @@ Operational runbooks:
 
 - `docs/phase-7-3-chatgpt-connector-ngrok-runbook.md`
 - `docs/phase-7-4-chatgpt-mcp-engine-startup-runbook.md`
+- `docs/phase-7-5-chatgpt-mcp-operations-checklist.md`
 
 Remaining Phase 7 focus:
 
