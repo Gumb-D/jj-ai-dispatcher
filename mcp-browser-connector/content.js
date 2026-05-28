@@ -135,10 +135,26 @@ async function simulateTyping(element, text, taskId) {
 
 // 3. Elastic selector targeting send button or firing Keyboard submission
 function clickSendButton(textbox) {
-  const sendButton = 
+  let sendButton = 
     document.querySelector('button[data-testid="send-button"]') ||
+    document.querySelector('button[data-testid*="send"]') ||
+    document.querySelector('button[data-testid*="Send"]') ||
     document.querySelector('button[aria-label="Send message"]') ||
+    document.querySelector('button[aria-label*="Send"]') ||
+    document.querySelector('button[aria-label*="send"]') ||
     document.querySelector('button.mb-1');
+    
+  if (!sendButton && textbox) {
+    const container = textbox.closest('form') || textbox.closest('div[class*="composer"]') || textbox.parentElement?.parentElement;
+    if (container) {
+      const buttons = Array.from(container.querySelectorAll('button'));
+      sendButton = buttons.find(btn => {
+        const id = (btn.getAttribute('data-testid') || '').toLowerCase();
+        const label = (btn.getAttribute('aria-label') || '').toLowerCase();
+        return id.includes('send') || label.includes('send');
+      }) || buttons[buttons.length - 1];
+    }
+  }
     
   if (sendButton && !sendButton.disabled) {
     sendButton.click();

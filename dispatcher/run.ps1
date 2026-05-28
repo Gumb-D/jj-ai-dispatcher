@@ -745,9 +745,10 @@ if ($runContext) {
         Write-Step "Triggering visible feedback postback to local bridge..."
         try {
             $summaryContent = Get-Content -LiteralPath $runContext.SummaryMd -Raw
+            $mode = if ($resultContract.needsReview) { "review" } else { "auto" }
             $postbackPayload = [ordered]@{
                 taskId = $runContext.TaskId
-                postbackMode = "review"
+                postbackMode = $mode
                 payload = [ordered]@{
                     summaryContent = $summaryContent
                 }
