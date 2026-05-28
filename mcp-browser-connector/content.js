@@ -95,8 +95,10 @@ async function simulateTyping(element, text, taskId) {
     const keypress = new KeyboardEvent("keypress", eventOptions);
     const input = new InputEvent("input", { inputType: "insertText", data: char, bubbles: true, cancelable: true });
     
-    element.dispatchEvent(keydown);
-    element.dispatchEvent(keypress);
+    if (char !== "\n" && char !== "\r") {
+      element.dispatchEvent(keydown);
+      element.dispatchEvent(keypress);
+    }
     
     if (isContentEditable) {
       // Direct insertion using modern edit commands to avoid React status breakages
@@ -107,8 +109,10 @@ async function simulateTyping(element, text, taskId) {
     
     element.dispatchEvent(input);
     
-    const keyup = new KeyboardEvent("keyup", eventOptions);
-    element.dispatchEvent(keyup);
+    if (char !== "\n" && char !== "\r") {
+      const keyup = new KeyboardEvent("keyup", eventOptions);
+      element.dispatchEvent(keyup);
+    }
 
     // Apply typing jittering and punctuation stop delay
     let characterDelay = baseSpeedMs;
