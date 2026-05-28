@@ -89,27 +89,49 @@ async function simulateTyping(element, text, taskId) {
   for (let i = 0; i < fullText.length; i++) {
     const char = fullText[i];
     
-    // Construct standard event options
-    const eventOptions = { key: char, bubbles: true, cancelable: true };
-    const keydown = new KeyboardEvent("keydown", eventOptions);
-    const keypress = new KeyboardEvent("keypress", eventOptions);
-    const input = new InputEvent("input", { inputType: "insertText", data: char, bubbles: true, cancelable: true });
-    
-    if (char !== "\n" && char !== "\r") {
+    if (char === "\n" || char === "\r") {
+      // Simulate a high-fidelity "Shift+Enter" key sequence to prevent editor submission
+      const shiftDown = new KeyboardEvent("keydown", { key: "Shift", code: "ShiftLeft", bubbles: true, cancelable: true, shiftKey: true });
+      const enterDown = new KeyboardEvent("keydown", { key: "Enter", code: "Enter", keyCode: 13, bubbles: true, cancelable: true, shiftKey: true });
+      const enterPress = new KeyboardEvent("keypress", { key: "Enter", code: "Enter", keyCode: 13, bubbles: true, cancelable: true, shiftKey: true });
+      
+      element.dispatchEvent(shiftDown);
+      element.dispatchEvent(enterDown);
+      element.dispatchEvent(enterPress);
+      
+      if (isContentEditable) {
+        document.execCommand("insertText", false, "\n");
+      } else {
+        element.value += "\n";
+      }
+      
+      const input = new InputEvent("input", { inputType: "insertLineBreak", bubbles: true, cancelable: true });
+      element.dispatchEvent(input);
+      
+      const enterUp = new KeyboardEvent("keyup", { key: "Enter", code: "Enter", keyCode: 13, bubbles: true, cancelable: true, shiftKey: true });
+      const shiftUp = new KeyboardEvent("keyup", { key: "Shift", code: "ShiftLeft", bubbles: true, cancelable: true, shiftKey: false });
+      
+      element.dispatchEvent(enterUp);
+      element.dispatchEvent(shiftUp);
+    } else {
+      // Construct standard event options
+      const eventOptions = { key: char, bubbles: true, cancelable: true };
+      const keydown = new KeyboardEvent("keydown", eventOptions);
+      const keypress = new KeyboardEvent("keypress", eventOptions);
+      const input = new InputEvent("input", { inputType: "insertText", data: char, bubbles: true, cancelable: true });
+      
       element.dispatchEvent(keydown);
       element.dispatchEvent(keypress);
-    }
-    
-    if (isContentEditable) {
-      // Direct insertion using modern edit commands to avoid React status breakages
-      document.execCommand("insertText", false, char);
-    } else {
-      element.value += char;
-    }
-    
-    element.dispatchEvent(input);
-    
-    if (char !== "\n" && char !== "\r") {
+      
+      if (isContentEditable) {
+        // Direct insertion using modern edit commands to avoid React status breakages
+        document.execCommand("insertText", false, char);
+      } else {
+        element.value += char;
+      }
+      
+      element.dispatchEvent(input);
+      
       const keyup = new KeyboardEvent("keyup", eventOptions);
       element.dispatchEvent(keyup);
     }
