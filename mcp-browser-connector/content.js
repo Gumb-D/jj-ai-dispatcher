@@ -90,29 +90,14 @@ async function simulateTyping(element, text, taskId) {
     const char = fullText[i];
     
     if (char === "\n" || char === "\r") {
-      // Simulate a high-fidelity "Shift+Enter" key sequence to prevent editor submission
-      const shiftDown = new KeyboardEvent("keydown", { key: "Shift", code: "ShiftLeft", bubbles: true, cancelable: true, shiftKey: true });
-      const enterDown = new KeyboardEvent("keydown", { key: "Enter", code: "Enter", keyCode: 13, bubbles: true, cancelable: true, shiftKey: true });
-      const enterPress = new KeyboardEvent("keypress", { key: "Enter", code: "Enter", keyCode: 13, bubbles: true, cancelable: true, shiftKey: true });
-      
-      element.dispatchEvent(shiftDown);
-      element.dispatchEvent(enterDown);
-      element.dispatchEvent(enterPress);
-      
       if (isContentEditable) {
-        document.execCommand("insertText", false, "\n");
+        document.execCommand("insertLineBreak");
       } else {
         element.value += "\n";
       }
       
       const input = new InputEvent("input", { inputType: "insertLineBreak", bubbles: true, cancelable: true });
       element.dispatchEvent(input);
-      
-      const enterUp = new KeyboardEvent("keyup", { key: "Enter", code: "Enter", keyCode: 13, bubbles: true, cancelable: true, shiftKey: true });
-      const shiftUp = new KeyboardEvent("keyup", { key: "Shift", code: "ShiftLeft", bubbles: true, cancelable: true, shiftKey: false });
-      
-      element.dispatchEvent(enterUp);
-      element.dispatchEvent(shiftUp);
     } else {
       // Construct standard event options
       const eventOptions = { key: char, bubbles: true, cancelable: true };
