@@ -733,6 +733,41 @@ if ($runContext) {
     Write-JsonFile -Path $runContext.TaskJson -Value $taskContract
     Write-JsonFile -Path $runContext.ResultJson -Value $resultContract
     Write-RunSummary -RunContext $runContext -ResultContract $resultContract -TaskText $taskText
+
+    # Phase 4 Visible Closed Loop Postback Trigger
+    $bridgeConfig = if ($config.PSObject.Properties.Name.Contains("bridge")) { $config.bridge } else { $null }
+    $bridgeEnabled = if ($null -ne $bridgeConfig -and $bridgeConfig.PSObject.Properties.Name.Contains("enabled")) { [bool]$bridgeConfig.enabled } else { $false }
+    
+    if ($bridgeEnabled) {
+        $port = if ($bridgeConfig.PSObject.Properties.Name.Contains("port")) { [int]$bridgeConfig.port } else { 8787 }
+        $postbackUrl = "http://127.0.0.1:$port/postback"
+        
+        Write-Step "Triggering visible feedback postback to local bridge..."
+        try {
+            $summaryContent = Get-Content -LiteralPath $runContext.SummaryMd -Raw
+            $postbackPayload = [ordered]@{
+                taskId = $runContext.TaskId
+                postbackMode = "review"
+                payload = [ordered]@{
+                    summaryContent = $summaryContent
+                }
+            }
+            
+            $headers = @{
+                "Content-Type" = "application/json"
+            }
+            if ($bridgeConfig.PSObject.Properties.Name.Contains("token") -and -not [string]::IsNullOrWhiteSpace($bridgeConfig.token)) {
+                $headers.Add("X-Dispatcher-Token", $bridgeConfig.token)
+            }
+            
+            $jsonBody = $postbackPayload | ConvertTo-Json -Depth 6
+            $postbackResult = Invoke-RestMethod -Uri $postbackUrl -Method Post -Headers $headers -Body $jsonBody -TimeoutSec 10
+            Write-Step "Postback successfully queued: $($postbackResult.message)"
+        }
+        catch {
+            Write-Step "Postback trigger warning: $($_.Exception.Message)"
+        }
+    }
 }
 
 Write-Host ""

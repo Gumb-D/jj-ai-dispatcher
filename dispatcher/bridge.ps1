@@ -10,9 +10,14 @@ $projectRoot = Split-Path $dispatcherRoot -Parent
 $configLoaderPath = Join-Path $projectRoot "scripts\load-config.ps1"
 $bridgeState = [pscustomobject]@{
     TaskState = "idle"
-    AllowedTaskStates = @("idle", "running")
+    AllowedTaskStates = @("idle", "running", "postback_pending", "postback_typing")
     ActiveProcess = $null
     ActiveStartedAt = $null
+    ActiveConversationUuid = ""
+    PostbackQueue = [System.Collections.ArrayList]::new()
+    ActivePostback = $null
+    PostbackTimeoutMs = 120000
+    PostbackStartTicks = 0
 }
 
 function Write-BridgeStep {
@@ -129,6 +134,20 @@ function Update-BridgeTaskState {
         $State.TaskState = "idle"
         $State.ActiveProcess = $null
         $State.ActiveStartedAt = $null
+    }
+
+    if ($State.TaskState -eq "postback_typing" -and $State.PostbackStartTicks -gt 0) {
+        $nowTicks = [System.DateTime]::Now.Ticks
+        $elapsedMs = ($nowTicks - $State.PostbackStartTicks) / [System.TimeSpan]::TicksPerMillisecond
+        if ($elapsedMs -gt $State.PostbackTimeoutMs) {
+            Write-BridgeStep "Postback typing timeout exceeded. Reverting task state to idle and clearing queue."
+            $State.TaskState = "idle"
+            $State.ActivePostback = $null
+            $State.PostbackStartTicks = 0
+            if ($State.PostbackQueue.Count -gt 0) {
+                $State.PostbackQueue.RemoveAt(0)
+            }
+        }
     }
 }
 
@@ -269,6 +288,15 @@ function Invoke-DispatchRequest {
     }
 
     try {
+        if ($dispatch.PSObject.Properties.Name.Contains("conversationUuid")) {
+            $State.ActiveConversationUuid = [string]$dispatch.conversationUuid
+        } else {
+            $State.ActiveConversationUuid = ""
+        }
+        $State.PostbackQueue.Clear()
+        $State.ActivePostback = $null
+        $State.PostbackStartTicks = 0
+
         Write-DispatchInboxFiles -Dispatch $dispatch
         $process = Start-DispatcherCodexTask
         $State.TaskState = "running"
@@ -436,6 +464,158 @@ function Invoke-RunResultRequest {
     })
 }
 
+function Invoke-PostbackRequest {
+    param(
+        [System.Net.HttpListenerContext]$Context,
+        [pscustomobject]$State
+    )
+
+    $request = $Context.Request
+    $response = $Context.Response
+
+    try {
+        $postback = Read-JsonRequestBody -Request $request
+    }
+    catch {
+        Write-JsonResponse -Response $response -StatusCode 400 -Body ([ordered]@{
+            success = $false
+            error = "Invalid JSON payload: $($_.Exception.Message)"
+        })
+        return
+    }
+
+    if (-not $postback.PSObject.Properties.Name.Contains("taskId") -or [string]::IsNullOrWhiteSpace($postback.taskId)) {
+        Write-JsonResponse -Response $response -StatusCode 400 -Body ([ordered]@{
+            success = $false
+            error = "Missing taskId."
+        })
+        return
+    }
+
+    if (-not $postback.PSObject.Properties.Name.Contains("payload") -or $null -eq $postback.payload -or -not $postback.payload.PSObject.Properties.Name.Contains("summaryContent")) {
+        Write-JsonResponse -Response $response -StatusCode 400 -Body ([ordered]@{
+            success = $false
+            error = "Missing payload.summaryContent."
+        })
+        return
+    }
+
+    # Extract conversationUuid fallback
+    $uuid = ""
+    if ($postback.PSObject.Properties.Name.Contains("conversationUuid") -and -not [string]::IsNullOrWhiteSpace($postback.conversationUuid)) {
+        $uuid = [string]$postback.conversationUuid
+    } else {
+        $uuid = $State.ActiveConversationUuid
+    }
+
+    $mode = "review"
+    if ($postback.PSObject.Properties.Name.Contains("postbackMode") -and -not [string]::IsNullOrWhiteSpace($postback.postbackMode)) {
+        $mode = [string]$postback.postbackMode
+    }
+
+    $task = [pscustomobject]@{
+        taskId = [string]$postback.taskId
+        conversationUuid = $uuid
+        postbackMode = $mode
+        contentToType = [string]$postback.payload.summaryContent
+    }
+
+    # Add to queue and transition state
+    [void]$State.PostbackQueue.Add($task)
+    $State.TaskState = "postback_pending"
+
+    Write-BridgeStep "Accepted postback for task $($task.taskId) in mode $($task.postbackMode). Queue size: $($State.PostbackQueue.Count)"
+
+    Write-JsonResponse -Response $response -StatusCode 202 -Body ([ordered]@{
+        success = $true
+        message = "Postback accepted and queued."
+        taskId = $task.taskId
+        taskState = $State.TaskState
+    })
+}
+
+function Invoke-PostbackPendingRequest {
+    param(
+        [System.Net.HttpListenerContext]$Context,
+        [pscustomobject]$State
+    )
+
+    $request = $Context.Request
+    $response = $Context.Response
+
+    if ($State.PostbackQueue.Count -gt 0) {
+        $task = $State.PostbackQueue[0]
+        $State.TaskState = "postback_typing"
+        $State.ActivePostback = $task
+        $State.PostbackStartTicks = [System.DateTime]::Now.Ticks
+
+        Write-BridgeStep "Serving pending postback task $($task.taskId) to extension. State updated to postback_typing."
+
+        Write-JsonResponse -Response $response -StatusCode 200 -Body ([ordered]@{
+            hasPending = $true
+            task = $task
+        })
+    } else {
+        Write-JsonResponse -Response $response -StatusCode 200 -Body ([ordered]@{
+            hasPending = $false
+            task = $null
+        })
+    }
+}
+
+function Invoke-PostbackCompleteRequest {
+    param(
+        [System.Net.HttpListenerContext]$Context,
+        [pscustomobject]$State
+    )
+
+    $request = $Context.Request
+    $response = $Context.Response
+
+    try {
+        $body = Read-JsonRequestBody -Request $request
+    }
+    catch {
+        Write-JsonResponse -Response $response -StatusCode 400 -Body ([ordered]@{
+            success = $false
+            error = "Invalid JSON payload: $($_.Exception.Message)"
+        })
+        return
+    }
+
+    if (-not $body.PSObject.Properties.Name.Contains("taskId") -or [string]::IsNullOrWhiteSpace($body.taskId)) {
+        Write-JsonResponse -Response $response -StatusCode 400 -Body ([ordered]@{
+            success = $false
+            error = "Missing taskId."
+        })
+        return
+    }
+
+    $taskId = [string]$body.taskId
+    Write-BridgeStep "Received complete confirmation for task $taskId"
+
+    if ($null -ne $State.ActivePostback -and $State.ActivePostback.taskId -eq $taskId) {
+        $State.TaskState = "idle"
+        $State.ActivePostback = $null
+        $State.PostbackStartTicks = 0
+        if ($State.PostbackQueue.Count -gt 0) {
+            $State.PostbackQueue.RemoveAt(0)
+        }
+        Write-BridgeStep "Acknowledged completion of $taskId. State reset to idle. Queue size: $($State.PostbackQueue.Count)"
+        
+        Write-JsonResponse -Response $response -StatusCode 200 -Body ([ordered]@{
+            success = $true
+            message = "Task completion acknowledged."
+        })
+    } else {
+        # Silent success to keep extension idempotent
+        Write-JsonResponse -Response $response -StatusCode 200 -Body ([ordered]@{
+            success = $true
+            message = "Task already resolved or mismatched."
+        })
+    }
+}
+
 function Invoke-BridgeRequest {
     param(
         [System.Net.HttpListenerContext]$Context,
@@ -465,6 +645,21 @@ function Invoke-BridgeRequest {
         return
     }
 
+    if ($request.HttpMethod -eq "POST" -and $request.Url.AbsolutePath -eq "/postback") {
+        Invoke-PostbackRequest -Context $Context -State $State
+        return
+    }
+
+    if ($request.HttpMethod -eq "GET" -and $request.Url.AbsolutePath -eq "/postback/pending") {
+        Invoke-PostbackPendingRequest -Context $Context -State $State
+        return
+    }
+
+    if ($request.HttpMethod -eq "POST" -and $request.Url.AbsolutePath -eq "/postback/complete") {
+        Invoke-PostbackCompleteRequest -Context $Context -State $State
+        return
+    }
+
     if ($request.Url.AbsolutePath -eq "/runs" -or $request.Url.AbsolutePath.StartsWith("/runs/", [System.StringComparison]::OrdinalIgnoreCase)) {
         Invoke-RunResultRequest -Context $Context
         return
@@ -473,7 +668,7 @@ function Invoke-BridgeRequest {
     if ($request.HttpMethod -ne "GET" -or $request.Url.AbsolutePath -ne "/status") {
         Write-JsonResponse -Response $response -StatusCode 404 -Body ([ordered]@{
             status = "not_found"
-            error = "Only GET /status, POST /dispatch, GET /runs/latest, and GET /runs/{taskId} are available."
+            error = "Only GET /status, POST /dispatch, GET /runs/latest, GET /runs/{taskId}, and /postback endpoints are available."
         })
         return
     }
