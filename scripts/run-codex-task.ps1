@@ -32,6 +32,6 @@ Write-Host "[codex-worker] Repo: $Repo"
 Write-Host "[codex-worker] Safety: no auto-push, no destructive actions unless explicitly requested."
 Write-Host ""
 
-& $config.codexExe exec --cd $Repo $prompt
+$prompt | & $config.codexExe exec --cd $Repo
 
 exit $LASTEXITCODE

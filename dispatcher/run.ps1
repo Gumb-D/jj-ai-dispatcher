@@ -630,7 +630,7 @@ Write-Host "[codex-worker] Prompt: dispatcher/inbox/codex-task.txt"
 Write-Host "[codex-worker] Target repo: $escapedRepoPath"
 Write-Host "[codex-worker] Safety: no auto-push, no destructive actions unless explicitly requested."
 Write-Host ""
-& `$config.codexExe exec --cd '$escapedRepoPath' `$prompt
+`$prompt | & `$config.codexExe exec --cd '$escapedRepoPath'
 exit `$LASTEXITCODE
 "@
         $encodedRunner = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($runner))
