@@ -44,15 +44,14 @@ async function executePostback(task) {
       console.log("[Content] Review Mode enabled. Flashing green border for operator manual review.");
       flashBorder(textbox);
     }
-
+  } catch (err) {
+    console.error("[Content] Failure encountered during postback injection:", err);
+  } finally {
     // 4. Report task injection completed back to background worker
     chrome.runtime.sendMessage({
       action: "REPORT_COMPLETE",
       taskId: task.taskId
     });
-
-  } catch (err) {
-    console.error("[Content] Failure encountered during postback injection:", err);
   }
 }
 

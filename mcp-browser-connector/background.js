@@ -3,6 +3,7 @@ const PENDING_ENDPOINT = "http://127.0.0.1:8787/postback/pending";
 const COMPLETE_ENDPOINT = "http://127.0.0.1:8787/postback/complete";
 const POLL_INTERVAL_MS = 1500;
 let isPolling = false;
+const activeTaskIds = new Set();
 
 // Robust fetch helper with configured headers
 async function fetchFromBridge(url, options = {}) {
@@ -35,7 +36,13 @@ async function pollPendingTasks() {
   try {
     const data = await fetchFromBridge(PENDING_ENDPOINT);
     if (data && data.hasPending && data.task) {
+      const taskId = data.task.taskId;
+      if (activeTaskIds.has(taskId)) {
+        console.log("[Background] Task is already actively being processed:", taskId);
+        return;
+      }
       console.log("[Background] Found pending postback task:", data.task);
+      activeTaskIds.add(taskId);
       await routePostbackTask(data.task);
     }
   } catch (error) {
@@ -100,6 +107,8 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   if (request.action === "REPORT_COMPLETE") {
     console.log(`[Background] Task ${request.taskId} injection complete. Sending completion response to local bridge...`);
     
+    activeTaskIds.delete(request.taskId);
+
     fetchFromBridge(COMPLETE_ENDPOINT, {
       method: "POST",
       body: JSON.stringify({

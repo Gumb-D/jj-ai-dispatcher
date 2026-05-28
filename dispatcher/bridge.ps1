@@ -544,6 +544,14 @@ function Invoke-PostbackPendingRequest {
     $response = $Context.Response
 
     if ($State.PostbackQueue.Count -gt 0) {
+        if ($State.TaskState -eq "postback_typing") {
+            Write-JsonResponse -Response $response -StatusCode 200 -Body ([ordered]@{
+                hasPending = $false
+                task = $null
+            })
+            return
+        }
+
         $task = $State.PostbackQueue[0]
         $State.TaskState = "postback_typing"
         $State.ActivePostback = $task

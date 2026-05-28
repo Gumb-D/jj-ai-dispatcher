@@ -232,6 +232,7 @@ async function assertBridgeTokenRequired() {
 async function main() {
   let client;
   let serverProcess;
+  let started;
 
   try {
     await runBuild();
@@ -241,7 +242,7 @@ async function main() {
     pass("bridge token/local config required");
 
     const port = await findOpenPort();
-    const started = await startHttpAdapter(port);
+    started = await startHttpAdapter(port);
     serverProcess = started.child;
     const localUrl = `http://127.0.0.1:${port}/mcp`;
     pass("mcp http adapter start", localUrl);
@@ -255,8 +256,10 @@ async function main() {
     assertExactTools(listed.tools);
     pass("tool registration", EXPECTED_TOOLS.join(", "));
 
+    const rawStatusRes = await client.callTool({ name: "dispatcher_status", arguments: {} });
+    console.log("SMOKE TEST DEBUG - dispatcher_status RAW RESULT:", JSON.stringify(rawStatusRes, null, 2));
     const status = parseToolPayload(
-      await client.callTool({ name: "dispatcher_status", arguments: {} }),
+      rawStatusRes,
       "dispatcher_status"
     );
     assertStatus(status);
@@ -276,12 +279,17 @@ async function main() {
     pass("mcp http smoke complete");
   } catch (error) {
     fail("mcp http smoke", error?.message || "unknown failure");
+    if (typeof started !== "undefined" && started?.output) {
+      console.error("HTTP ADAPTER OUTPUT:\n", started.output);
+    }
     if (client) {
       await client.close().catch(() => {});
     }
     process.exitCode = 1;
   } finally {
-    await stopHttpAdapter(serverProcess);
+    if (typeof serverProcess !== "undefined" && serverProcess) {
+      await stopHttpAdapter(serverProcess);
+    }
   }
 }
 

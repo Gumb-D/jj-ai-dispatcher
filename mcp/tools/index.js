@@ -4,13 +4,17 @@ import {
   dispatchInputSchema,
   emptyInputSchema,
   getRunInputSchema,
-  parseInput
+  parseInput,
+  statusOutputSchema,
+  dispatchOutputSchema,
+  runOutputSchema
 } from "./schemas.js";
 
 export function registerDispatcherTools(server, bridgeClient) {
   server.registerTool("dispatcher_status", {
     description: "Read local Dispatcher bridge status.",
-    inputSchema: emptyInputSchema
+    inputSchema: emptyInputSchema,
+    outputSchema: statusOutputSchema
   }, async (input) => callTool(async () => {
     parseInput(emptyInputSchema, input, "dispatcher_status");
     return bridgeClient.status();
@@ -19,6 +23,7 @@ export function registerDispatcherTools(server, bridgeClient) {
   server.registerTool("dispatcher_dispatch", {
     description: "Submit one explicit, approved task to the existing local Dispatcher bridge.",
     inputSchema: dispatchInputSchema,
+    outputSchema: dispatchOutputSchema,
     annotations: {
       destructiveHint: true,
       openWorldHint: false
@@ -36,7 +41,8 @@ export function registerDispatcherTools(server, bridgeClient) {
 
   server.registerTool("dispatcher_latest_result", {
     description: "Read the latest Dispatcher run result from the local bridge.",
-    inputSchema: emptyInputSchema
+    inputSchema: emptyInputSchema,
+    outputSchema: runOutputSchema
   }, async (input) => callTool(async () => {
     parseInput(emptyInputSchema, input, "dispatcher_latest_result");
     return bridgeClient.latestResult();
@@ -44,7 +50,8 @@ export function registerDispatcherTools(server, bridgeClient) {
 
   server.registerTool("dispatcher_get_run", {
     description: "Read a specific Dispatcher run result by task ID from the local bridge.",
-    inputSchema: getRunInputSchema
+    inputSchema: getRunInputSchema,
+    outputSchema: runOutputSchema
   }, async (input) => callTool(async () => {
     const { taskId } = parseInput(getRunInputSchema, input, "dispatcher_get_run");
     return bridgeClient.getRun(taskId);

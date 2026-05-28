@@ -46,6 +46,7 @@ export function toToolResult(value) {
         type: "text",
         text: JSON.stringify(value, null, 2)
       }
-    ]
+    ],
+    structuredContent: value
   };
 }
