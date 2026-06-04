@@ -12,6 +12,9 @@ async function executePostback(task) {
   let textbox = null;
   let attempts = 0;
   const maxAttempts = 5;
+  const postbackMode = task.postbackMode === "auto" ? "auto" : "review";
+  let typingSucceeded = false;
+  let sendSucceeded = false;
 
   // Elastic retries to handle dynamic Single-Page App rendering transitions
   while (!textbox && attempts < maxAttempts) {
@@ -24,7 +27,7 @@ async function executePostback(task) {
   }
 
   if (!textbox) {
-    console.error("[Content] Target prompt textbox not found. Aborting postback.");
+    console.error("[Content] Target prompt textbox not found. REPORT_COMPLETE will not be sent.");
     return;
   }
 
@@ -34,24 +37,40 @@ async function executePostback(task) {
 
     // 2. Perform high-fidelity simulated typing (safeguards React states)
     await simulateTyping(textbox, task.contentToType, task.taskId);
+    typingSucceeded = true;
+    console.log("[Content] Visible typing completed successfully.");
 
     // 3. Resolve submission action based on target mode
-    if (task.postbackMode === "auto") {
+    if (postbackMode === "auto") {
       console.log("[Content] Visible Auto Mode enabled. Waiting 2.5s before click send...");
       await delay(2500);
-      clickSendButton(textbox);
+      sendSucceeded = clickSendButton(textbox);
+      if (!sendSucceeded) {
+        console.error("[Content] Auto Mode send action could not be attempted. REPORT_COMPLETE will not be sent.");
+        return;
+      }
+      console.log("[Content] Auto Mode completed: visible typing succeeded and send action was attempted.");
     } else {
       console.log("[Content] Review Mode enabled. Flashing green border for operator manual review.");
       flashBorder(textbox);
+      console.log("[Content] Review Mode completed: visible typing succeeded.");
     }
-  } catch (err) {
-    console.error("[Content] Failure encountered during postback injection:", err);
-  } finally {
-    // 4. Report task injection completed back to background worker
+
     chrome.runtime.sendMessage({
       action: "REPORT_COMPLETE",
-      taskId: task.taskId
+      taskId: task.taskId,
+      typingSucceeded,
+      sendSucceeded,
+      postbackMode
     });
+    console.log("[Content] REPORT_COMPLETE sent:", {
+      taskId: task.taskId,
+      typingSucceeded,
+      sendSucceeded,
+      postbackMode
+    });
+  } catch (err) {
+    console.error("[Content] Failure encountered during postback injection. REPORT_COMPLETE will not be sent:", err);
   }
 }
 
@@ -135,6 +154,11 @@ async function simulateTyping(element, text, taskId) {
 
 // 3. Elastic selector targeting send button or firing Keyboard submission
 function clickSendButton(textbox) {
+  if (!textbox) {
+    console.error("[Content] Cannot attempt send action because textbox is unavailable.");
+    return false;
+  }
+
   let sendButton = 
     document.querySelector('button[data-testid="send-button"]') ||
     document.querySelector('button[data-testid*="send"]') ||
@@ -159,10 +183,13 @@ function clickSendButton(textbox) {
   if (sendButton && !sendButton.disabled) {
     sendButton.click();
     console.log("[Content] Send button clicked successfully.");
+    return true;
   } else {
-    console.log("[Content] Send button unavailable. Simulating Enter key press.");
-    const enterDown = new KeyboardEvent("keydown", { key: "Enter", keyCode: 13, code: "Enter", bubbles: true });
+    console.log("[Content] Send button unavailable. Attempting Enter key fallback.");
+    const enterDown = new KeyboardEvent("keydown", { key: "Enter", keyCode: 13, code: "Enter", bubbles: true, cancelable: true });
     textbox.dispatchEvent(enterDown);
+    console.log("[Content] Enter key fallback dispatched successfully.");
+    return true;
   }
 }
 
