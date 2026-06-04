@@ -10,7 +10,6 @@ The subproject starts under `launcher/` for internal development. It can later b
 
 The launcher must preserve these boundaries:
 
-- No real service startup logic in the current launcher.
 - No direct Codex invocation.
 - No Dispatcher core changes.
 - No MCP changes.
@@ -18,6 +17,7 @@ The launcher must preserve these boundaries:
 - No cloud deployment automation.
 - No token values or secrets in committed files.
 - No hardcoded user-specific runtime paths except generic example placeholders.
+- No health check implementation yet.
 
 Future startup behavior should be explicit, operator-visible, and driven by configuration. Disabled services must stay disabled unless config enables them.
 
@@ -52,23 +52,28 @@ This lets the same launcher support local workstations, VMs, and cloud-hosted mi
 - Print a startup preview without executing commands.
 - Omit arguments and environment values from logs to avoid exposing secrets.
 
-Current limitation: startup is not implemented yet. The launcher only loads config and prints the resolved plan.
+Phase 1 established config loading and resolved plan output. Startup now happens in the next phase unless `-PlanOnly` is supplied.
 
-### Phase 2: Validation
+### Phase 2: Validation and Local Startup
 
 - Validate schema shape, required service fields, duplicate names, dependency references, and disabled services.
+- Add `-PlanOnly` for safe preview without startup.
+- Validate enabled service working directories before startup.
+- Start enabled services in separate PowerShell windows.
+- Skip disabled services.
 
-### Phase 3: Dry-Run Startup Planning
+Current limitation: health checks are not implemented yet.
+
+### Phase 3: Dry-Run Startup Planning Enhancements
 
 - Resolve dependency order.
 - Show the exact services that would start.
 - Show working directories and health checks.
 - Add clear failure messages for missing paths, unsupported runtime types, and invalid dependency graphs.
 
-### Phase 4: Controlled Local Startup
+### Phase 4: Controlled Local Startup Enhancements
 
-- Add opt-in local service startup.
-- Start only enabled services.
+- Improve local service startup controls.
 - Keep command execution visible and auditable.
 - Avoid direct Codex invocation and avoid Dispatcher core changes.
 
@@ -94,4 +99,6 @@ Current limitation: startup is not implemented yet. The launcher only loads conf
 
 The current launcher loads `launcher.config.local.json` from the launcher folder and prints a resolved plan for enabled services. If local config is missing, it prints setup guidance telling the operator to copy `launcher.config.example.json` to `launcher.config.local.json` and edit local paths.
 
-Running `start.bat` or `launcher.ps1` does not start services, launch terminals, invoke Codex, modify Dispatcher core, modify MCP, or install schedulers.
+Running `start.bat` or `launcher.ps1` normally starts enabled services in separate PowerShell windows after printing the resolved plan and validating enabled service working directories. Running `launcher.ps1 -PlanOnly` or `start.bat -PlanOnly` prints the resolved plan without starting services.
+
+The launcher still does not invoke Codex, modify Dispatcher core, modify MCP, install schedulers, or implement health checks.

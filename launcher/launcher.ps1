@@ -1,6 +1,7 @@
 [CmdletBinding()]
 param(
-    [string]$ConfigPath
+    [string]$ConfigPath,
+    [switch]$PlanOnly
 )
 
 $scriptDirectory = if ($PSScriptRoot) { $PSScriptRoot } else { Split-Path -Parent $MyInvocation.MyCommand.Path }
@@ -38,8 +39,37 @@ function Get-ServiceCommandText {
     return $command
 }
 
+function ConvertTo-PowerShellLiteral {
+    param(
+        [AllowNull()]
+        [object]$Value
+    )
+
+    if ($null -eq $Value) {
+        return "''"
+    }
+
+    $text = [string]$Value
+    return "'" + $text.Replace("'", "''") + "'"
+}
+
+function Get-ServiceArguments {
+    param(
+        [Parameter(Mandatory = $true)]
+        [object]$Service
+    )
+
+    if ($Service.arguments -isnot [array]) {
+        return @()
+    }
+
+    return @($Service.arguments | ForEach-Object { Resolve-LauncherValue $_ })
+}
+
 Write-Host "JJ AI Dispatcher Launcher"
-Write-Host "Dry-run only: startup is not implemented and no services are started."
+if ($PlanOnly) {
+    Write-Host "Plan-only mode: no services will be started."
+}
 Write-Host ""
 
 if (-not (Test-Path -LiteralPath $ConfigPath)) {
@@ -52,7 +82,7 @@ if (-not (Test-Path -LiteralPath $ConfigPath)) {
     Write-Host ""
     Write-Host "Expected path: $ConfigPath"
     Write-Host ""
-    Write-Host "Safety boundary: this script does not invoke Codex, modify Dispatcher core, modify MCP, create schedulers, deploy cloud resources, or start services."
+    Write-Host "Safety boundary: this script does not invoke Codex, modify Dispatcher core, modify MCP, create schedulers, deploy cloud resources, or implement health checks."
     return
 }
 
@@ -69,7 +99,37 @@ if ($null -eq $config.services) {
     exit 1
 }
 
-$enabledServices = @($config.services | Where-Object { $_.enabled -eq $true })
+$servicePlans = @()
+$validationErrors = @()
+
+foreach ($service in @($config.services)) {
+    $serviceName = if ($service.name) { $service.name } else { "<unnamed service>" }
+    $enabled = $service.enabled -eq $true
+    $workingDirectory = Resolve-LauncherValue $service.workingDirectory
+    $command = Resolve-LauncherValue $service.command
+    $commandText = Get-ServiceCommandText $service
+    $arguments = Get-ServiceArguments $service
+
+    if ($service.healthCheck -and $service.healthCheck.url) {
+        $null = Resolve-LauncherValue $service.healthCheck.url
+    }
+
+    if ($enabled -and (-not $workingDirectory -or -not (Test-Path -LiteralPath $workingDirectory -PathType Container))) {
+        $validationErrors += "Service '$serviceName' has a missing workingDirectory: $workingDirectory"
+    }
+
+    $servicePlans += [pscustomobject]@{
+        Name = $serviceName
+        Enabled = $enabled
+        WorkingDirectory = $workingDirectory
+        Command = $command
+        CommandText = $commandText
+        Arguments = $arguments
+    }
+}
+
+$enabledServices = @($servicePlans | Where-Object { $_.Enabled })
+$disabledServices = @($servicePlans | Where-Object { -not $_.Enabled })
 
 Write-Host "Config loaded: $ConfigPath"
 Write-Host "Variable values:"
@@ -83,19 +143,61 @@ if ($enabledServices.Count -eq 0) {
 }
 else {
     foreach ($service in $enabledServices) {
-        $serviceName = if ($service.name) { $service.name } else { "<unnamed service>" }
-        $workingDirectory = Resolve-LauncherValue $service.workingDirectory
-        $command = Get-ServiceCommandText $service
+        Write-Host "  - Service: $($service.Name)"
+        Write-Host "    Working directory: $($service.WorkingDirectory)"
+        Write-Host "    Command: $($service.CommandText)"
+    }
+}
 
-        if ($service.healthCheck -and $service.healthCheck.url) {
-            $null = Resolve-LauncherValue $service.healthCheck.url
+if ($disabledServices.Count -gt 0) {
+    Write-Host ""
+    Write-Host "Skipped disabled services:"
+    foreach ($service in $disabledServices) {
+        Write-Host "  - $($service.Name)"
+    }
+}
+
+if ($validationErrors.Count -gt 0) {
+    Write-Host ""
+    Write-Error "Launcher config validation failed. Fix the enabled service workingDirectory values before startup."
+    foreach ($validationError in $validationErrors) {
+        Write-Error "  $validationError"
+    }
+    exit 1
+}
+
+Write-Host ""
+if ($PlanOnly) {
+    Write-Host "Plan-only mode complete. No services were started."
+}
+elseif ($enabledServices.Count -eq 0) {
+    Write-Host "No enabled services to start."
+}
+else {
+    Write-Host "Starting enabled services in separate PowerShell windows..."
+    foreach ($service in $enabledServices) {
+        Write-Host "  Starting: $($service.Name)"
+
+        $commandParts = @(
+            "Set-Location -LiteralPath $(ConvertTo-PowerShellLiteral $service.WorkingDirectory);"
+            "& $(ConvertTo-PowerShellLiteral $service.Command)"
+        )
+
+        foreach ($argument in $service.Arguments) {
+            $commandParts += (ConvertTo-PowerShellLiteral $argument)
         }
 
-        Write-Host "  - Service: $serviceName"
-        Write-Host "    Working directory: $workingDirectory"
-        Write-Host "    Command: $command"
+        $commandLine = $commandParts -join " "
+        Start-Process -FilePath "powershell.exe" -WorkingDirectory $service.WorkingDirectory -ArgumentList @(
+            "-NoExit",
+            "-NoProfile",
+            "-ExecutionPolicy",
+            "Bypass",
+            "-Command",
+            $commandLine
+        )
     }
 }
 
 Write-Host ""
-Write-Host "Safety boundary: this script does not invoke Codex, modify Dispatcher core, modify MCP, create schedulers, deploy cloud resources, or start services."
+Write-Host "Safety boundary: this script does not invoke Codex, modify Dispatcher core, modify MCP, create schedulers, deploy cloud resources, or implement health checks."
