@@ -7,8 +7,8 @@
       "name": "dispatcher-bridge",
       "enabled": false,
       "type": "powershell",
-      "workingDirectory": "D:\\path\\to\\jj-ai-dispatcher",
-      "command": ".\\dispatcher\\bridge.ps1",
+      "workingDirectory": "${dispatcherRoot}",
+      "command": "${dispatcherRoot}\\dispatcher\\bridge.ps1",
       "arguments": [],
       "healthCheck": {
         "type": "manual",
@@ -20,14 +20,14 @@
       "name": "mcp-http-adapter",
       "enabled": false,
       "type": "node",
-      "workingDirectory": "D:\\path\\to\\jj-ai-dispatcher",
+      "workingDirectory": "${dispatcherRoot}",
       "command": "node",
       "arguments": [
         ".\\mcp\\server\\http.js"
       ],
       "healthCheck": {
         "type": "http",
-        "url": "http://127.0.0.1:3000/health"
+        "url": "http://127.0.0.1:3000/health?launcher=${launcherRoot}"
       },
       "dependsOn": [
         "dispatcher-bridge"

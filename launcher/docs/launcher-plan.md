@@ -10,7 +10,7 @@ The subproject starts under `launcher/` for internal development. It can later b
 
 The launcher must preserve these boundaries:
 
-- No real service startup logic in this initial skeleton.
+- No real service startup logic in the current launcher.
 - No direct Codex invocation.
 - No Dispatcher core changes.
 - No MCP changes.
@@ -44,39 +44,47 @@ This lets the same launcher support local workstations, VMs, and cloud-hosted mi
 - Add README, plan documentation, example config, batch entry point, and PowerShell placeholder.
 - Confirm the script prints guidance only and does not start services.
 
-### Phase 1: Config Loading and Validation
+### Phase 1: Config Loading and Dry-Run Plan
 
 - Load `launcher.config.local.json` or an explicitly supplied config path.
-- Validate schema shape, required service fields, duplicate names, dependency references, and disabled services.
+- Print clear setup instructions when local config is missing.
+- Resolve `${dispatcherRoot}` and `${launcherRoot}` in service `workingDirectory`, service `command`, and health check `url` fields.
 - Print a startup preview without executing commands.
+- Omit arguments and environment values from logs to avoid exposing secrets.
 
-### Phase 2: Dry-Run Startup Planning
+Current limitation: startup is not implemented yet. The launcher only loads config and prints the resolved plan.
+
+### Phase 2: Validation
+
+- Validate schema shape, required service fields, duplicate names, dependency references, and disabled services.
+
+### Phase 3: Dry-Run Startup Planning
 
 - Resolve dependency order.
 - Show the exact services that would start.
 - Show working directories and health checks.
 - Add clear failure messages for missing paths, unsupported runtime types, and invalid dependency graphs.
 
-### Phase 3: Controlled Local Startup
+### Phase 4: Controlled Local Startup
 
 - Add opt-in local service startup.
 - Start only enabled services.
 - Keep command execution visible and auditable.
 - Avoid direct Codex invocation and avoid Dispatcher core changes.
 
-### Phase 4: VM-Ready Configuration
+### Phase 5: VM-Ready Configuration
 
 - Add VM-oriented config examples.
 - Support host, port, and health-check differences through config.
 - Keep startup behavior consistent with local mode.
 
-### Phase 5: Cloud Migration Readiness
+### Phase 6: Cloud Migration Readiness
 
 - Document cloud-hosted service assumptions.
 - Support cloud-oriented service descriptors through config only.
 - Do not automate cloud deployment unless a separate approved project phase adds that scope.
 
-### Phase 6: Standalone Repository Extraction
+### Phase 7: Standalone Repository Extraction
 
 - Evaluate whether `launcher/` should become `jj-ai-dispatcher-launcher`.
 - Move documentation, tests, config schema, and launcher code into the standalone repo.
@@ -84,4 +92,6 @@ This lets the same launcher support local workstations, VMs, and cloud-hosted mi
 
 ## Current State
 
-The current launcher is a placeholder. Running `start.bat` or `launcher.ps1` prints setup guidance and safety boundaries only.
+The current launcher loads `launcher.config.local.json` from the launcher folder and prints a resolved plan for enabled services. If local config is missing, it prints setup guidance telling the operator to copy `launcher.config.example.json` to `launcher.config.local.json` and edit local paths.
+
+Running `start.bat` or `launcher.ps1` does not start services, launch terminals, invoke Codex, modify Dispatcher core, modify MCP, or install schedulers.
