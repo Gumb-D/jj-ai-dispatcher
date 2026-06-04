@@ -1,0 +1,43 @@
+{
+  "version": 1,
+  "environment": "local-example",
+  "description": "Example-only config for the future JJ AI Dispatcher Launcher. Do not place secrets here.",
+  "services": [
+    {
+      "name": "dispatcher-bridge",
+      "enabled": false,
+      "type": "powershell",
+      "workingDirectory": "D:\\path\\to\\jj-ai-dispatcher",
+      "command": ".\\dispatcher\\bridge.ps1",
+      "arguments": [],
+      "healthCheck": {
+        "type": "manual",
+        "description": "Operator verifies bridge status after startup."
+      },
+      "dependsOn": []
+    },
+    {
+      "name": "mcp-http-adapter",
+      "enabled": false,
+      "type": "node",
+      "workingDirectory": "D:\\path\\to\\jj-ai-dispatcher",
+      "command": "node",
+      "arguments": [
+        ".\\mcp\\server\\http.js"
+      ],
+      "healthCheck": {
+        "type": "http",
+        "url": "http://127.0.0.1:3000/health"
+      },
+      "dependsOn": [
+        "dispatcher-bridge"
+      ]
+    }
+  ],
+  "notes": [
+    "This file is example config only.",
+    "Copy to launcher.config.local.json for machine-specific values.",
+    "Keep token values, API keys, and secrets out of launcher config.",
+    "Future local, VM, and cloud migration should be handled by changing config values only."
+  ]
+}

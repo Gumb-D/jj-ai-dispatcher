@@ -1,0 +1,9 @@
+# Local launcher configuration may contain machine-specific paths.
+launcher.config.local.json
+
+# Runtime output and diagnostics.
+logs/
+*.log
+
+# PowerShell transient files.
+*.tmp
