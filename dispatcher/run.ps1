@@ -288,6 +288,240 @@ function Invoke-LoggedCommand {
     }
 }
 
+function Get-ConfigNumber {
+    param(
+        [object]$Object,
+        [string]$Name,
+        [int]$DefaultValue
+    )
+
+    if ($null -eq $Object -or -not $Object.PSObject.Properties.Name.Contains($Name)) {
+        return $DefaultValue
+    }
+
+    $value = 0
+    if ([int]::TryParse([string]$Object.$Name, [ref]$value) -and $value -gt 0) {
+        return $value
+    }
+
+    return $DefaultValue
+}
+
+function Get-WorkerTimeoutSeconds {
+    param([pscustomobject]$Config)
+
+    $envTimeout = [Environment]::GetEnvironmentVariable("JJ_DISPATCHER_WORKER_TIMEOUT_SECONDS")
+    $parsed = 0
+    if ([int]::TryParse($envTimeout, [ref]$parsed) -and $parsed -gt 0) {
+        return $parsed
+    }
+
+    return Get-ConfigNumber -Object $Config -Name "workerTimeoutSeconds" -DefaultValue 1800
+}
+
+function Get-OwnedProcessTree {
+    param([int]$RootProcessId)
+
+    $all = @(Get-CimInstance Win32_Process -ErrorAction SilentlyContinue)
+    $byParent = @{}
+    foreach ($processInfo in $all) {
+        $parentId = [int]$processInfo.ParentProcessId
+        if (-not $byParent.ContainsKey($parentId)) {
+            $byParent[$parentId] = New-Object System.Collections.Generic.List[object]
+        }
+        $byParent[$parentId].Add($processInfo)
+    }
+
+    $descendants = New-Object System.Collections.Generic.List[object]
+    $queue = New-Object System.Collections.Queue
+    $queue.Enqueue($RootProcessId)
+
+    while ($queue.Count -gt 0) {
+        $current = [int]$queue.Dequeue()
+        if (-not $byParent.ContainsKey($current)) {
+            continue
+        }
+
+        foreach ($child in $byParent[$current]) {
+            $descendants.Add($child)
+            $queue.Enqueue([int]$child.ProcessId)
+        }
+    }
+
+    return @($descendants | ForEach-Object { $_ })
+}
+
+function Stop-OwnedProcessTree {
+    param(
+        [int]$RootProcessId,
+        [int]$GraceSeconds = 5
+    )
+
+    $descendants = @(Get-OwnedProcessTree -RootProcessId $RootProcessId)
+    $targets = @($descendants | Sort-Object ProcessId -Descending | ForEach-Object { [int]$_.ProcessId })
+    $targets += $RootProcessId
+    $terminated = New-Object System.Collections.Generic.List[int]
+
+    foreach ($targetPid in $targets) {
+        $process = Get-Process -Id $targetPid -ErrorAction SilentlyContinue
+        if ($null -eq $process) {
+            continue
+        }
+
+        Stop-Process -Id $targetPid -Force -ErrorAction SilentlyContinue
+        $terminated.Add($targetPid)
+    }
+
+    $deadline = (Get-Date).AddSeconds($GraceSeconds)
+    do {
+        $remaining = @($targets | Where-Object { $null -ne (Get-Process -Id $_ -ErrorAction SilentlyContinue) })
+        if ($remaining.Count -eq 0) {
+            break
+        }
+        Start-Sleep -Milliseconds 200
+    } while ((Get-Date) -lt $deadline)
+
+    $stillRunning = @($targets | Where-Object { $null -ne (Get-Process -Id $_ -ErrorAction SilentlyContinue) })
+
+    return [pscustomobject]@{
+        terminatedPids = @($terminated)
+        remainingPids = @($stillRunning)
+    }
+}
+
+function Invoke-WorkerProcess {
+    param(
+        [string]$FilePath,
+        [string[]]$ArgumentList,
+        [string]$WorkingDirectory,
+        [string]$LogFile,
+        [int]$TimeoutSeconds
+    )
+
+    $stdoutFile = "$LogFile.stdout.tmp"
+    $stderrFile = "$LogFile.stderr.tmp"
+    $process = $null
+    $timedOut = $false
+    $treeCleanup = $null
+    $startTime = Get-Date
+    $stdoutTask = $null
+    $stderrTask = $null
+
+    try {
+        $startInfo = [System.Diagnostics.ProcessStartInfo]::new()
+        $startInfo.FileName = $FilePath
+        $startInfo.WorkingDirectory = $WorkingDirectory
+        $startInfo.UseShellExecute = $false
+        $startInfo.RedirectStandardOutput = $true
+        $startInfo.RedirectStandardError = $true
+        $startInfo.CreateNoWindow = $true
+        foreach ($argument in $ArgumentList) {
+            [void]$startInfo.ArgumentList.Add($argument)
+        }
+
+        $process = [System.Diagnostics.Process]::new()
+        $process.StartInfo = $startInfo
+        [void]$process.Start()
+        $stdoutTask = $process.StandardOutput.ReadToEndAsync()
+        $stderrTask = $process.StandardError.ReadToEndAsync()
+
+        $deadline = $startTime.AddSeconds($TimeoutSeconds)
+        while (-not $process.HasExited) {
+            if ((Get-Date) -ge $deadline) {
+                $timedOut = $true
+                $treeCleanup = Stop-OwnedProcessTree -RootProcessId $process.Id
+                break
+            }
+
+            Start-Sleep -Milliseconds 500
+            $process.Refresh()
+        }
+
+        if (-not $timedOut -and -not $process.HasExited) {
+            $process.WaitForExit()
+        }
+    }
+    catch {
+        $stdout = if ($stdoutTask -and $stdoutTask.IsCompleted) { $stdoutTask.Result } elseif (Test-Path $stdoutFile) { Get-Content $stdoutFile -Raw } else { "" }
+        $stderr = if ($stderrTask -and $stderrTask.IsCompleted) { $stderrTask.Result } elseif (Test-Path $stderrFile) { Get-Content $stderrFile -Raw } else { "" }
+        $message = "Worker launch failed: $($_.Exception.Message)"
+        if (-not [string]::IsNullOrWhiteSpace($_.ScriptStackTrace)) {
+            $message = "$message`n$($_.ScriptStackTrace)"
+        }
+        Add-Content -Path $LogFile -Value "COMMAND:"
+        Add-Content -Path $LogFile -Value "$FilePath $($ArgumentList -join ' ')"
+        Add-Content -Path $LogFile -Value ""
+        Add-Content -Path $LogFile -Value "WORKING DIRECTORY:"
+        Add-Content -Path $LogFile -Value $WorkingDirectory
+        Add-Content -Path $LogFile -Value ""
+        Add-Content -Path $LogFile -Value $message
+        return @{
+            ExitCode = 1
+            Stdout = $stdout
+            Stderr = (Join-ResultText -Existing $stderr -Addition $message)
+            Phase = "worker launch"
+            WorkerPid = $null
+            TimedOut = $false
+            TimeoutSeconds = $TimeoutSeconds
+            TerminatedPids = @()
+            RemainingPids = @()
+        }
+    }
+
+    try {
+        if ($stdoutTask) {
+            [void]$stdoutTask.Wait([TimeSpan]::FromSeconds(5))
+        }
+        if ($stderrTask) {
+            [void]$stderrTask.Wait([TimeSpan]::FromSeconds(5))
+        }
+    }
+    catch {
+        Add-Content -Path $LogFile -Value "WARNING: failed to finish async output read: $($_.Exception.Message)"
+    }
+
+    $stdout = if ($stdoutTask -and $stdoutTask.IsCompleted) { $stdoutTask.Result } elseif (Test-Path $stdoutFile) { Get-Content $stdoutFile -Raw } else { "" }
+    $stderr = if ($stderrTask -and $stderrTask.IsCompleted) { $stderrTask.Result } elseif (Test-Path $stderrFile) { Get-Content $stderrFile -Raw } else { "" }
+    Set-Content -LiteralPath $stdoutFile -Value $stdout -Encoding UTF8 -NoNewline
+    Set-Content -LiteralPath $stderrFile -Value $stderr -Encoding UTF8 -NoNewline
+    $exitCode = if ($timedOut) { 124 } elseif ($null -ne $process) { $process.ExitCode } else { 1 }
+    $phase = if ($timedOut) { "worker timeout" } elseif ($exitCode -eq 0) { "worker execution" } else { "worker execution" }
+
+    Add-Content -Path $LogFile -Value "COMMAND:"
+    Add-Content -Path $LogFile -Value "$FilePath $($ArgumentList -join ' ')"
+    Add-Content -Path $LogFile -Value ""
+    Add-Content -Path $LogFile -Value "WORKING DIRECTORY:"
+    Add-Content -Path $LogFile -Value $WorkingDirectory
+    Add-Content -Path $LogFile -Value ""
+    Add-Content -Path $LogFile -Value "WORKER PID: $(if ($process) { $process.Id } else { '' })"
+    Add-Content -Path $LogFile -Value "TIMEOUT SECONDS: $TimeoutSeconds"
+    Add-Content -Path $LogFile -Value "TIMED OUT: $timedOut"
+    if ($treeCleanup) {
+        Add-Content -Path $LogFile -Value "TERMINATED PIDS: $($treeCleanup.terminatedPids -join ', ')"
+        Add-Content -Path $LogFile -Value "REMAINING PIDS: $($treeCleanup.remainingPids -join ', ')"
+    }
+    Add-Content -Path $LogFile -Value ""
+    Add-Content -Path $LogFile -Value "STDOUT:"
+    Add-Content -Path $LogFile -Value $stdout
+    Add-Content -Path $LogFile -Value ""
+    Add-Content -Path $LogFile -Value "STDERR:"
+    Add-Content -Path $LogFile -Value $stderr
+    Add-Content -Path $LogFile -Value ""
+    Add-Content -Path $LogFile -Value "EXIT CODE: $exitCode"
+
+    return @{
+        ExitCode = $exitCode
+        Stdout = $stdout
+        Stderr = $stderr
+        Phase = $phase
+        WorkerPid = if ($process) { $process.Id } else { $null }
+        TimedOut = $timedOut
+        TimeoutSeconds = $TimeoutSeconds
+        TerminatedPids = if ($treeCleanup) { @($treeCleanup.terminatedPids) } else { @() }
+        RemainingPids = if ($treeCleanup) { @($treeCleanup.remainingPids) } else { @() }
+    }
+}
+
 function New-FailedResult {
     param([string]$Message)
 
@@ -339,13 +573,22 @@ function Invoke-CodexTaskGitCommit {
 
     Write-Step "Git status check..."
     Add-ResultOutput -Result $Result -Stdout "[dispatcher] Git status check..."
+    $identity = try { (& whoami) -join [Environment]::NewLine } catch { "unknown: $($_.Exception.Message)" }
+    $indexLockPath = Join-Path (Join-Path $RepoPath ".git") "index.lock"
+    $indexLockExists = Test-Path -LiteralPath $indexLockPath -PathType Leaf
+    Add-ResultOutput -Result $Result -Stdout "[dispatcher] Git executable: $($Config.gitExe)"
+    Add-ResultOutput -Result $Result -Stdout "[dispatcher] Git working directory: $RepoPath"
+    Add-ResultOutput -Result $Result -Stdout "[dispatcher] Process identity: $identity"
+    Add-ResultOutput -Result $Result -Stdout "[dispatcher] Git index lock exists before Git operations: $indexLockExists"
 
     $statusResult = Invoke-LoggedCommand -FilePath $Config.gitExe -ArgumentList @("status", "--short") -WorkingDirectory $RepoPath -LogFile $LogFile
     Add-ResultOutput -Result $Result -Stdout $statusResult.Stdout -Stderr $statusResult.Stderr
     if ($statusResult.ExitCode -ne 0) {
         $Result.ExitCode = $statusResult.ExitCode
+        $Result.Phase = "Git status"
         $ResultContract.status = "failed"
         $ResultContract.needsReview = $true
+        $ResultContract.summary = "Dispatcher Git status failed."
         $ResultContract.reviewHints = @("Git status failed.")
         Add-ResultOutput -Result $Result -Stdout "[dispatcher] Git status failed."
         Add-ResultOutput -Result $Result -Stdout $statusResult.Stderr
@@ -381,8 +624,10 @@ function Invoke-CodexTaskGitCommit {
     Add-ResultOutput -Result $Result -Stdout $addResult.Stdout -Stderr $addResult.Stderr
     if ($addResult.ExitCode -ne 0) {
         $Result.ExitCode = $addResult.ExitCode
+        $Result.Phase = "Git add"
         $ResultContract.status = "failed"
         $ResultContract.needsReview = $true
+        $ResultContract.summary = "Dispatcher Git add failed."
         $ResultContract.reviewHints = @("Git add failed.")
         Add-ResultOutput -Result $Result -Stdout "[dispatcher] Git add failed."
         Add-ResultOutput -Result $Result -Stdout $addResult.Stderr
@@ -392,8 +637,10 @@ function Invoke-CodexTaskGitCommit {
     $diffResult = Invoke-LoggedCommand -FilePath $Config.gitExe -ArgumentList @("diff", "--cached", "--binary") -WorkingDirectory $RepoPath -LogFile $LogFile
     if ($diffResult.ExitCode -ne 0) {
         $Result.ExitCode = $diffResult.ExitCode
+        $Result.Phase = "Git diff"
         $ResultContract.status = "failed"
         $ResultContract.needsReview = $true
+        $ResultContract.summary = "Dispatcher Git diff generation failed."
         $ResultContract.reviewHints = @("Git diff generation failed.")
         Add-ResultOutput -Result $Result -Stdout "[dispatcher] Git diff generation failed."
         Add-ResultOutput -Result $Result -Stdout $diffResult.Stderr
@@ -407,8 +654,10 @@ function Invoke-CodexTaskGitCommit {
     Add-ResultOutput -Result $Result -Stdout $commitResult.Stdout -Stderr $commitResult.Stderr
     if ($commitResult.ExitCode -ne 0) {
         $Result.ExitCode = $commitResult.ExitCode
+        $Result.Phase = "Git commit"
         $ResultContract.status = "failed"
         $ResultContract.needsReview = $true
+        $ResultContract.summary = "Dispatcher Git commit failed."
         $ResultContract.reviewHints = @("Git commit failed.")
         Add-ResultOutput -Result $Result -Stdout "[dispatcher] Git commit failed."
         Add-ResultOutput -Result $Result -Stdout $commitResult.Stderr
@@ -487,6 +736,11 @@ if (-not (Test-Path $configLoaderPath)) {
 $config = & $configLoaderPath
 $localConfigLoaded = Test-Path $localConfigPath
 $tasks = Get-Content $tasksPath -Raw | ConvertFrom-Json
+$testGitExe = [Environment]::GetEnvironmentVariable("JJ_DISPATCHER_TEST_GIT_EXE")
+if (-not [string]::IsNullOrWhiteSpace($testGitExe)) {
+    $config.gitExe = $testGitExe
+}
+$workerTimeoutSeconds = Get-WorkerTimeoutSeconds -Config $config
 
 if (-not $tasks.PSObject.Properties.Name.Contains($TaskName)) {
     $available = ($tasks.PSObject.Properties.Name -join ", ")
@@ -572,7 +826,9 @@ Write-Step "Repo: $repoPath"
 Write-Step "Log: $logFile"
 
 $result = $null
+$executionError = $null
 
+try {
 switch ($task.worker) {
     "codex" {
         $scriptPath = Join-Path $projectRoot "scripts\run-codex-task.ps1"
@@ -634,7 +890,23 @@ Write-Host ""
 exit `$LASTEXITCODE
 "@
         $encodedRunner = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($runner))
-        $result = Invoke-LoggedCommand -FilePath "pwsh" -ArgumentList @("-NoProfile", "-ExecutionPolicy", "Bypass", "-EncodedCommand", $encodedRunner) -WorkingDirectory $projectRoot -LogFile $logFile
+        $testWorkerCommand = [Environment]::GetEnvironmentVariable("JJ_DISPATCHER_TEST_WORKER_COMMAND")
+        if (-not [string]::IsNullOrWhiteSpace($testWorkerCommand)) {
+            $escapedTestWorkerCommand = $testWorkerCommand.Replace("'", "''")
+            $runner = @"
+`$ErrorActionPreference = "Stop"
+`$prompt = Get-Content -LiteralPath '$escapedPromptPath' -Raw
+Write-Host "[codex-worker] Prompt: dispatcher/inbox/codex-task.txt"
+Write-Host "[codex-worker] Target repo: $escapedRepoPath"
+Write-Host "[codex-worker] Test worker: $escapedTestWorkerCommand"
+Write-Host ""
+& '$escapedTestWorkerCommand' -Repo '$escapedRepoPath' -Prompt `$prompt
+exit `$LASTEXITCODE
+"@
+            $encodedRunner = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($runner))
+        }
+
+        $result = Invoke-WorkerProcess -FilePath "pwsh" -ArgumentList @("-NoProfile", "-ExecutionPolicy", "Bypass", "-EncodedCommand", $encodedRunner) -WorkingDirectory $projectRoot -LogFile $logFile -TimeoutSeconds $workerTimeoutSeconds
         Set-Content -LiteralPath $runContext.StdoutLog -Value $result.Stdout -Encoding UTF8 -NoNewline
         Set-Content -LiteralPath $runContext.StderrLog -Value $result.Stderr -Encoding UTF8 -NoNewline
         $workerLogsCaptured = $true
@@ -686,11 +958,26 @@ exit `$LASTEXITCODE
         throw "Unsupported worker: $($task.worker)"
     }
 }
+}
+catch {
+    $executionError = $_
+    $message = "Unexpected dispatcher failure during finalization lifecycle: $($_.Exception.Message)"
+    if ($null -eq $result) {
+        $result = New-FailedResult -Message $message
+    }
+    else {
+        $result.ExitCode = 1
+        Add-ResultOutput -Result $result -Stderr $message
+    }
+}
+finally {
 
 if ($runContext) {
     if (-not $workerLogsCaptured) {
-        Set-Content -LiteralPath $runContext.StdoutLog -Value $result.Stdout -Encoding UTF8 -NoNewline
-        Set-Content -LiteralPath $runContext.StderrLog -Value $result.Stderr -Encoding UTF8 -NoNewline
+        $stdoutValue = if ($null -ne $result) { $result.Stdout } else { "" }
+        $stderrValue = if ($null -ne $result) { $result.Stderr } else { "" }
+        Set-Content -LiteralPath $runContext.StdoutLog -Value $stdoutValue -Encoding UTF8 -NoNewline
+        Set-Content -LiteralPath $runContext.StderrLog -Value $stderrValue -Encoding UTF8 -NoNewline
     }
 
     if (-not $resultContract) {
@@ -712,12 +999,21 @@ if ($runContext) {
             $hint = if ([string]::IsNullOrWhiteSpace($result.Stderr)) { "Codex task did not complete successfully." } else { $result.Stderr.Trim() }
             $resultContract.reviewHints = @($hint)
         }
+        if ($result.ContainsKey("Phase")) {
+            $resultContract.summary = "Dispatcher task failed during $($result.Phase)."
+        }
     }
 
     if (Test-Path -LiteralPath $repoPath -PathType Container) {
-        $finalStatus = Invoke-LoggedCommand -FilePath $config.gitExe -ArgumentList @("status", "--short") -WorkingDirectory $repoPath -LogFile $logFile
-        if ($finalStatus.ExitCode -eq 0) {
-            $resultContract.workingTreeClean = [string]::IsNullOrWhiteSpace($finalStatus.Stdout)
+        try {
+            $finalStatus = Invoke-LoggedCommand -FilePath $config.gitExe -ArgumentList @("status", "--short") -WorkingDirectory $repoPath -LogFile $logFile
+            if ($finalStatus.ExitCode -eq 0) {
+                $resultContract.workingTreeClean = [string]::IsNullOrWhiteSpace($finalStatus.Stdout)
+            }
+        }
+        catch {
+            $resultContract.needsReview = $true
+            $resultContract.reviewHints = @($resultContract.reviewHints + "Final git status failed: $($_.Exception.Message)")
         }
     }
 
@@ -737,6 +1033,9 @@ if ($runContext) {
     # Phase 4 Visible Closed Loop Postback Trigger
     $bridgeConfig = if ($config.PSObject.Properties.Name.Contains("bridge")) { $config.bridge } else { $null }
     $bridgeEnabled = if ($null -ne $bridgeConfig -and $bridgeConfig.PSObject.Properties.Name.Contains("enabled")) { [bool]$bridgeConfig.enabled } else { $false }
+    if ([Environment]::GetEnvironmentVariable("JJ_DISPATCHER_DISABLE_POSTBACK") -eq "true") {
+        $bridgeEnabled = $false
+    }
     
     if ($bridgeEnabled) {
         $port = if ($bridgeConfig.PSObject.Properties.Name.Contains("port")) { [int]$bridgeConfig.port } else { 8787 }
@@ -769,6 +1068,7 @@ if ($runContext) {
             Write-Step "Postback trigger warning: $($_.Exception.Message)"
         }
     }
+}
 }
 
 Write-Host ""

@@ -4,6 +4,7 @@
   "openclawExe": "openclaw",
   "gitExe": "git",
   "logRetentionDays": 30,
+  "workerTimeoutSeconds": 1800,
   "bridge": {
     "enabled": false,
     "host": "127.0.0.1",
