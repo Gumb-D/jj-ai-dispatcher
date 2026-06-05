@@ -58,6 +58,8 @@ Current standing:
 
 Current stabilization focus is the approved P0-P3 plan in [docs/JJ_AI_DISPATCHER_P0_P3_STABILIZATION_PLAN.md](docs/JJ_AI_DISPATCHER_P0_P3_STABILIZATION_PLAN.md). P0.1 is documentation consolidation only; version and runtime metadata alignment are reserved for P0.2.
 
+Current release metadata baseline is `0.8.0`, selected as the stabilization-development baseline after the existing historical Git tag sequence through `v0.7-autonomous-sprint-poc`. Historical tags and phase records remain unchanged. The final `v0.8.0` Git tag is deferred until P0-P3 final stabilization acceptance; do not create it during P0.2 metadata alignment.
+
 ## MCP Tool Surface
 
 The approved MCP tool surface is intentionally narrow:

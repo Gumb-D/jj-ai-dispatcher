@@ -38,7 +38,7 @@
     {
       "name": "MCP HTTP Adapter endpoint",
       "enabled": false,
-      "url": "http://127.0.0.1:3000/health",
+      "url": "http://127.0.0.1:8790/health",
       "method": "GET",
       "timeoutSeconds": 5,
       "headers": {

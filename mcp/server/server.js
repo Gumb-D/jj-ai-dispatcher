@@ -9,7 +9,7 @@ export async function createServer() {
   const bridgeClient = new BridgeClient(config);
   const server = new McpServer({
     name: "jj-ai-dispatcher",
-    version: "0.1.0"
+    version: "0.8.0"
   });
 
   registerDispatcherTools(server, bridgeClient);

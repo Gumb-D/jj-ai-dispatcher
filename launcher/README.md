@@ -137,7 +137,7 @@ The config loader supports basic variable substitution for these values:
 
 Substitution is applied to service `workingDirectory`, service `command`, service `arguments`, health check `url`, and health check header values. The resolved service startup plan prints enabled services with service name, working directory, and command. Disabled services are listed as skipped. Arguments and environment values are not printed to avoid leaking secrets.
 
-The example config includes disabled health checks for Dispatcher Bridge status on `http://127.0.0.1:8787/status` and the MCP HTTP Adapter on `http://127.0.0.1:3000/health`. Keep Dispatcher Bridge bound to localhost; do not expose or tunnel port 8787. If a header token is needed, use a local-only value and never commit the real token.
+The example config includes disabled health checks for Dispatcher Bridge status on `http://127.0.0.1:8787/status` and the MCP HTTP Adapter on `http://127.0.0.1:8790/health`. Keep Dispatcher Bridge bound to localhost; do not expose or tunnel port 8787. If a header token is needed, use a local-only value and never commit the real token.
 
 ## MVP Checklist
 

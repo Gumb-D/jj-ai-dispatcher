@@ -165,7 +165,7 @@ Pending:
 
 ```text
 □ End-to-end launcher execution test
-□ v0.8-launcher-mvp tag
+□ final v0.8.0 tag after P0-P3 final stabilization acceptance
 □ Standalone repo extraction decision
 ```
 
@@ -337,7 +337,7 @@ Example:
     {
       "name": "MCP HTTP Adapter endpoint",
       "enabled": false,
-      "url": "http://127.0.0.1:3000/health",
+      "url": "http://127.0.0.1:8790/health",
       "method": "GET",
       "timeoutSeconds": 5,
       "headers": {
