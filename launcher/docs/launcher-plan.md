@@ -17,7 +17,8 @@ The launcher must preserve these boundaries:
 - No cloud deployment automation.
 - No token values or secrets in committed files.
 - No hardcoded user-specific runtime paths except generic example placeholders.
-- No health check implementation yet.
+- No secret health check header logging.
+- No external exposure or tunneling of Dispatcher Bridge port 8787.
 
 Future startup behavior should be explicit, operator-visible, and driven by configuration. Disabled services must stay disabled unless config enables them.
 
@@ -62,7 +63,7 @@ Phase 1 established config loading and resolved plan output. Startup now happens
 - Start enabled services in separate PowerShell windows.
 - Skip disabled services.
 
-Current limitation: health checks are not implemented yet.
+Phase 2 established local startup while preserving `-PlanOnly` as a non-starting preview mode.
 
 ### Phase 3: Dry-Run Startup Planning Enhancements
 
@@ -71,11 +72,17 @@ Current limitation: health checks are not implemented yet.
 - Show working directories and health checks.
 - Add clear failure messages for missing paths, unsupported runtime types, and invalid dependency graphs.
 
+Phase 3 now includes configured health check planning. The plan output shows health check name, enabled state, URL, method, timeout, and masked header names.
+
 ### Phase 4: Controlled Local Startup Enhancements
 
 - Improve local service startup controls.
 - Keep command execution visible and auditable.
 - Avoid direct Codex invocation and avoid Dispatcher core changes.
+- Run enabled health checks after startup using `startupDelaySeconds`.
+- Add `-HealthOnly` for checking already-running services without starting new windows.
+- Print `PASS`, `FAIL`, and `SKIP` health check results with a final summary.
+- Bound each health check with `timeoutSeconds` so launcher execution does not block forever.
 
 ### Phase 5: VM-Ready Configuration
 
@@ -99,6 +106,18 @@ Current limitation: health checks are not implemented yet.
 
 The current launcher loads `launcher.config.local.json` from the launcher folder and prints a resolved plan for enabled services. If local config is missing, it prints setup guidance telling the operator to copy `launcher.config.example.json` to `launcher.config.local.json` and edit local paths.
 
-Running `start.bat` or `launcher.ps1` normally starts enabled services in separate PowerShell windows after printing the resolved plan and validating enabled service working directories. Running `launcher.ps1 -PlanOnly` or `start.bat -PlanOnly` prints the resolved plan without starting services.
+Running `start.bat` or `launcher.ps1` normally starts enabled services in separate PowerShell windows after printing the resolved plan and validating enabled service working directories, waits for `startupDelaySeconds`, and then runs enabled health checks.
 
-The launcher still does not invoke Codex, modify Dispatcher core, modify MCP, install schedulers, or implement health checks.
+Running `launcher.ps1 -PlanOnly` or `start.bat -PlanOnly` prints the resolved service and health check plan without starting services or calling health check endpoints.
+
+Running `launcher.ps1 -HealthOnly` or `start.bat -HealthOnly` runs configured health checks without starting services.
+
+Example commands:
+
+```powershell
+.\launcher.ps1 -PlanOnly
+.\launcher.ps1
+.\launcher.ps1 -HealthOnly
+```
+
+The launcher still does not invoke Codex, modify Dispatcher core, modify MCP, install schedulers, expose or tunnel Dispatcher Bridge port 8787, or log secret health check header values.

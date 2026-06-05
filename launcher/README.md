@@ -23,9 +23,10 @@ The launcher does not:
 - Modify MCP configuration or MCP runtime behavior.
 - Install schedulers, background services, or cloud deployment automation.
 - Store token values, secrets, or user-specific runtime paths.
-- Implement health checks.
+- Expose or tunnel Dispatcher Bridge port 8787.
+- Log secret health check header values.
 
-`launcher.ps1` loads local config, prints a resolved startup plan for enabled services, validates enabled service working directories, and starts enabled services in separate PowerShell windows unless `-PlanOnly` is supplied.
+`launcher.ps1` loads local config, prints a resolved startup plan for enabled services, validates enabled service working directories, starts enabled services in separate PowerShell windows unless `-PlanOnly` is supplied, and runs configured health checks after startup. Use `-HealthOnly` to run health checks without starting services.
 
 ## Startup Concept
 
@@ -48,7 +49,7 @@ The same startup model should work across environments by changing config values
 ## Files
 
 - `start.bat` calls `launcher.ps1` normally and forwards arguments.
-- `launcher.ps1` loads `launcher.config.local.json`, prints a resolved startup plan, and starts enabled services unless `-PlanOnly` is supplied.
+- `launcher.ps1` loads `launcher.config.local.json`, prints a resolved startup plan, starts enabled services unless `-PlanOnly` or `-HealthOnly` is supplied, and runs configured health checks.
 - `launcher.config.example.json` shows example config structure without secrets.
 - `.gitignore` excludes local launcher config and transient logs.
 - `docs/launcher-plan.md` records the phased plan.
@@ -67,7 +68,13 @@ Or from PowerShell:
 .\launcher.ps1
 ```
 
-Both commands load `launcher.config.local.json`, print the resolved plan, skip disabled services, validate enabled service working directories, and then start each enabled service in its own PowerShell window.
+Both commands load `launcher.config.local.json`, print the resolved plan, skip disabled services, validate enabled service working directories, start each enabled service in its own PowerShell window, wait for `startupDelaySeconds`, and then run enabled health checks.
+
+Example:
+
+```powershell
+.\launcher.ps1
+```
 
 ## Plan-Only Usage
 
@@ -83,6 +90,32 @@ Or from PowerShell:
 .\launcher.ps1 -PlanOnly
 ```
 
+`-PlanOnly` only prints the resolved service and health check plan. It does not start services, wait for startup delay, or call health check endpoints.
+
+## Health-Only Usage
+
+Use `-HealthOnly` to run configured health checks without starting services:
+
+```bat
+start.bat -HealthOnly
+```
+
+Or from PowerShell:
+
+```powershell
+.\launcher.ps1 -HealthOnly
+```
+
+Each enabled health check supports:
+
+- `name`
+- `url`
+- `method`, defaulting to `GET`
+- `timeoutSeconds`, defaulting to `5`
+- `headers`, with values masked in launcher output
+
+Health checks print per-check `PASS`, `FAIL`, or `SKIP` lines and a final `PASS=... FAIL=... SKIP=...` summary. Timeouts and connection failures are reported as `FAIL` without blocking forever.
+
 On first run, if `launcher.config.local.json` does not exist, the script prints setup instructions:
 
 1. Copy `launcher.config.example.json` to `launcher.config.local.json`.
@@ -94,6 +127,6 @@ The config loader supports basic variable substitution for these values:
 - `${dispatcherRoot}` resolves to the repository root.
 - `${launcherRoot}` resolves to the `launcher/` directory.
 
-Substitution is applied to service `workingDirectory`, service `command`, and health check `url` fields. The resolved service startup plan prints enabled services with service name, working directory, and command. Disabled services are listed as skipped. Arguments and environment values are not printed to avoid leaking secrets.
+Substitution is applied to service `workingDirectory`, service `command`, service `arguments`, health check `url`, and health check header values. The resolved service startup plan prints enabled services with service name, working directory, and command. Disabled services are listed as skipped. Arguments and environment values are not printed to avoid leaking secrets.
 
-Health checks are not implemented yet. The launcher may resolve a configured health check URL for planning consistency, but it does not call health check endpoints or wait for readiness.
+The example config includes disabled health checks for Dispatcher Bridge status on `http://127.0.0.1:8787/status` and the MCP HTTP Adapter on `http://127.0.0.1:3000/health`. Keep Dispatcher Bridge bound to localhost; do not expose or tunnel port 8787. If a header token is needed, use a local-only value and never commit the real token.

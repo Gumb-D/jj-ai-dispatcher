@@ -1,7 +1,8 @@
 [CmdletBinding()]
 param(
     [string]$ConfigPath,
-    [switch]$PlanOnly
+    [switch]$PlanOnly,
+    [switch]$HealthOnly
 )
 
 $scriptDirectory = if ($PSScriptRoot) { $PSScriptRoot } else { Split-Path -Parent $MyInvocation.MyCommand.Path }
@@ -66,9 +67,145 @@ function Get-ServiceArguments {
     return @($Service.arguments | ForEach-Object { Resolve-LauncherValue $_ })
 }
 
+function ConvertTo-HeaderHashtable {
+    param(
+        [AllowNull()]
+        [object]$Headers
+    )
+
+    $resolvedHeaders = @{}
+    if ($null -eq $Headers) {
+        return $resolvedHeaders
+    }
+
+    foreach ($property in $Headers.PSObject.Properties) {
+        $resolvedHeaders[[string]$property.Name] = [string](Resolve-LauncherValue $property.Value)
+    }
+
+    return $resolvedHeaders
+}
+
+function Get-MaskedHeaderText {
+    param(
+        [hashtable]$Headers
+    )
+
+    if ($null -eq $Headers -or $Headers.Count -eq 0) {
+        return "none"
+    }
+
+    $maskedHeaders = @()
+    foreach ($headerName in ($Headers.Keys | Sort-Object)) {
+        $maskedHeaders += "$headerName=***"
+    }
+
+    return ($maskedHeaders -join ", ")
+}
+
+function Get-HealthChecksFromConfig {
+    param(
+        [Parameter(Mandatory = $true)]
+        [object]$Config
+    )
+
+    $checks = @()
+    if ($Config.healthChecks -is [array]) {
+        $checks += @($Config.healthChecks)
+    }
+    elseif ($null -ne $Config.healthChecks) {
+        $checks += $Config.healthChecks
+    }
+
+    foreach ($service in @($Config.services)) {
+        if ($service.healthCheck -and $service.healthCheck.url) {
+            $serviceCheck = $service.healthCheck | Select-Object *
+            if (-not $serviceCheck.name) {
+                $serviceCheck | Add-Member -NotePropertyName "name" -NotePropertyValue "$($service.name) health" -Force
+            }
+            if ($null -eq $serviceCheck.enabled) {
+                $serviceCheck | Add-Member -NotePropertyName "enabled" -NotePropertyValue ($service.enabled -eq $true) -Force
+            }
+            $checks += $serviceCheck
+        }
+    }
+
+    return @($checks)
+}
+
+function Invoke-LauncherHealthChecks {
+    param(
+        [Parameter(Mandatory = $true)]
+        [array]$HealthChecks
+    )
+
+    $results = @()
+    if ($HealthChecks.Count -eq 0) {
+        Write-Host "Health checks:"
+        Write-Host "  SKIP: no health checks configured."
+        $results += [pscustomobject]@{ Status = "SKIP"; Name = "no health checks configured"; Detail = "" }
+        return $results
+    }
+
+    Write-Host "Health checks:"
+    foreach ($healthCheck in $HealthChecks) {
+        $name = if ($healthCheck.name) { [string]$healthCheck.name } else { "<unnamed health check>" }
+        $enabled = $healthCheck.enabled -eq $true
+        $url = Resolve-LauncherValue $healthCheck.url
+        $method = if ($healthCheck.method) { [string]$healthCheck.method } else { "GET" }
+        $timeoutProperty = $healthCheck.PSObject.Properties["timeoutSeconds"]
+        $timeoutSeconds = if ($null -ne $timeoutProperty) { [int]$timeoutProperty.Value } else { 5 }
+        $headers = ConvertTo-HeaderHashtable $healthCheck.headers
+
+        if (-not $enabled) {
+            Write-Host "  SKIP: $name - disabled"
+            $results += [pscustomobject]@{ Status = "SKIP"; Name = $name; Detail = "disabled" }
+            continue
+        }
+
+        if (-not $url) {
+            Write-Host "  SKIP: $name - missing url"
+            $results += [pscustomobject]@{ Status = "SKIP"; Name = $name; Detail = "missing url" }
+            continue
+        }
+
+        if ($timeoutSeconds -lt 1) {
+            $timeoutSeconds = 1
+        }
+
+        Write-Host "  Checking: $name"
+        Write-Host "    URL: $url"
+        Write-Host "    Method: $method"
+        Write-Host "    Timeout: $timeoutSeconds second(s)"
+        Write-Host "    Headers: $(Get-MaskedHeaderText $headers)"
+
+        try {
+            $response = Invoke-WebRequest -Uri $url -Method $method -Headers $headers -TimeoutSec $timeoutSeconds -UseBasicParsing
+            $statusCode = [int]$response.StatusCode
+            if ($statusCode -ge 200 -and $statusCode -lt 400) {
+                Write-Host "  PASS: $name - HTTP $statusCode"
+                $results += [pscustomobject]@{ Status = "PASS"; Name = $name; Detail = "HTTP $statusCode" }
+            }
+            else {
+                Write-Host "  FAIL: $name - HTTP $statusCode"
+                $results += [pscustomobject]@{ Status = "FAIL"; Name = $name; Detail = "HTTP $statusCode" }
+            }
+        }
+        catch {
+            $failureMessage = $_.Exception.Message
+            Write-Host "  FAIL: $name - $failureMessage"
+            $results += [pscustomobject]@{ Status = "FAIL"; Name = $name; Detail = $failureMessage }
+        }
+    }
+
+    return $results
+}
+
 Write-Host "JJ AI Dispatcher Launcher"
 if ($PlanOnly) {
     Write-Host "Plan-only mode: no services will be started."
+}
+if ($HealthOnly) {
+    Write-Host "Health-only mode: no services will be started."
 }
 Write-Host ""
 
@@ -82,7 +219,7 @@ if (-not (Test-Path -LiteralPath $ConfigPath)) {
     Write-Host ""
     Write-Host "Expected path: $ConfigPath"
     Write-Host ""
-    Write-Host "Safety boundary: this script does not invoke Codex, modify Dispatcher core, modify MCP, create schedulers, deploy cloud resources, or implement health checks."
+    Write-Host "Safety boundary: this script does not invoke Codex, modify Dispatcher core, modify MCP, create schedulers, deploy cloud resources, expose Dispatcher Bridge port 8787 externally, or log secret header values."
     return
 }
 
@@ -101,6 +238,12 @@ if ($null -eq $config.services) {
 
 $servicePlans = @()
 $validationErrors = @()
+$startupDelayProperty = $config.PSObject.Properties["startupDelaySeconds"]
+$startupDelaySeconds = if ($null -ne $startupDelayProperty) { [int]$startupDelayProperty.Value } else { 3 }
+if ($startupDelaySeconds -lt 0) {
+    $startupDelaySeconds = 0
+}
+$healthChecks = Get-HealthChecksFromConfig $config
 
 foreach ($service in @($config.services)) {
     $serviceName = if ($service.name) { $service.name } else { "<unnamed service>" }
@@ -110,11 +253,7 @@ foreach ($service in @($config.services)) {
     $commandText = Get-ServiceCommandText $service
     $arguments = Get-ServiceArguments $service
 
-    if ($service.healthCheck -and $service.healthCheck.url) {
-        $null = Resolve-LauncherValue $service.healthCheck.url
-    }
-
-    if ($enabled -and (-not $workingDirectory -or -not (Test-Path -LiteralPath $workingDirectory -PathType Container))) {
+    if ($enabled -and (-not $HealthOnly) -and (-not $workingDirectory -or -not (Test-Path -LiteralPath $workingDirectory -PathType Container))) {
         $validationErrors += "Service '$serviceName' has a missing workingDirectory: $workingDirectory"
     }
 
@@ -135,6 +274,7 @@ Write-Host "Config loaded: $ConfigPath"
 Write-Host "Variable values:"
 Write-Host "  dispatcherRoot: $dispatcherRoot"
 Write-Host "  launcherRoot: $scriptDirectory"
+Write-Host "  startupDelaySeconds: $startupDelaySeconds"
 Write-Host ""
 Write-Host "Resolved service startup plan:"
 
@@ -157,6 +297,29 @@ if ($disabledServices.Count -gt 0) {
     }
 }
 
+Write-Host ""
+Write-Host "Configured health checks:"
+if ($healthChecks.Count -eq 0) {
+    Write-Host "  No health checks configured."
+}
+else {
+    foreach ($healthCheck in $healthChecks) {
+        $healthName = if ($healthCheck.name) { [string]$healthCheck.name } else { "<unnamed health check>" }
+        $healthEnabled = $healthCheck.enabled -eq $true
+        $healthUrl = Resolve-LauncherValue $healthCheck.url
+        $healthMethod = if ($healthCheck.method) { [string]$healthCheck.method } else { "GET" }
+        $healthTimeoutProperty = $healthCheck.PSObject.Properties["timeoutSeconds"]
+        $healthTimeout = if ($null -ne $healthTimeoutProperty) { [int]$healthTimeoutProperty.Value } else { 5 }
+        $healthHeaders = ConvertTo-HeaderHashtable $healthCheck.headers
+        Write-Host "  - Health check: $healthName"
+        Write-Host "    Enabled: $healthEnabled"
+        Write-Host "    URL: $healthUrl"
+        Write-Host "    Method: $healthMethod"
+        Write-Host "    Timeout: $healthTimeout second(s)"
+        Write-Host "    Headers: $(Get-MaskedHeaderText $healthHeaders)"
+    }
+}
+
 if ($validationErrors.Count -gt 0) {
     Write-Host ""
     Write-Error "Launcher config validation failed. Fix the enabled service workingDirectory values before startup."
@@ -170,8 +333,12 @@ Write-Host ""
 if ($PlanOnly) {
     Write-Host "Plan-only mode complete. No services were started."
 }
+elseif ($HealthOnly) {
+    $healthResults = Invoke-LauncherHealthChecks $healthChecks
+}
 elseif ($enabledServices.Count -eq 0) {
     Write-Host "No enabled services to start."
+    $healthResults = Invoke-LauncherHealthChecks $healthChecks
 }
 else {
     Write-Host "Starting enabled services in separate PowerShell windows..."
@@ -197,7 +364,21 @@ else {
             $commandLine
         )
     }
+
+    if ($startupDelaySeconds -gt 0) {
+        Write-Host ""
+        Write-Host "Waiting $startupDelaySeconds second(s) before health checks..."
+        Start-Sleep -Seconds $startupDelaySeconds
+    }
+
+    $healthResults = Invoke-LauncherHealthChecks $healthChecks
 }
 
 Write-Host ""
-Write-Host "Safety boundary: this script does not invoke Codex, modify Dispatcher core, modify MCP, create schedulers, deploy cloud resources, or implement health checks."
+if ($null -ne $healthResults) {
+    $passCount = @($healthResults | Where-Object { $_.Status -eq "PASS" }).Count
+    $failCount = @($healthResults | Where-Object { $_.Status -eq "FAIL" }).Count
+    $skipCount = @($healthResults | Where-Object { $_.Status -eq "SKIP" }).Count
+    Write-Host "Health check summary: PASS=$passCount FAIL=$failCount SKIP=$skipCount"
+}
+Write-Host "Safety boundary: this script does not invoke Codex, modify Dispatcher core, modify MCP, create schedulers, deploy cloud resources, expose Dispatcher Bridge port 8787 externally, or log secret header values."

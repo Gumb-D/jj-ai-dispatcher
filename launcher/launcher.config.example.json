@@ -2,6 +2,7 @@
   "version": 1,
   "environment": "local-example",
   "description": "Example-only config for the future JJ AI Dispatcher Launcher. Do not place secrets here.",
+  "startupDelaySeconds": 3,
   "services": [
     {
       "name": "dispatcher-bridge",
@@ -10,10 +11,6 @@
       "workingDirectory": "${dispatcherRoot}",
       "command": "${dispatcherRoot}\\dispatcher\\bridge.ps1",
       "arguments": [],
-      "healthCheck": {
-        "type": "manual",
-        "description": "Operator verifies bridge status after startup."
-      },
       "dependsOn": []
     },
     {
@@ -25,19 +22,36 @@
       "arguments": [
         ".\\mcp\\server\\http.js"
       ],
-      "healthCheck": {
-        "type": "http",
-        "url": "http://127.0.0.1:3000/health?launcher=${launcherRoot}"
-      },
       "dependsOn": [
         "dispatcher-bridge"
       ]
+    }
+  ],
+  "healthChecks": [
+    {
+      "name": "Dispatcher Bridge status",
+      "enabled": false,
+      "url": "http://127.0.0.1:8787/status",
+      "method": "GET",
+      "timeoutSeconds": 5
+    },
+    {
+      "name": "MCP HTTP Adapter endpoint",
+      "enabled": false,
+      "url": "http://127.0.0.1:3000/health",
+      "method": "GET",
+      "timeoutSeconds": 5,
+      "headers": {
+        "Authorization": "Bearer PLACEHOLDER_TOKEN_DO_NOT_USE"
+      }
     }
   ],
   "notes": [
     "This file is example config only.",
     "Copy to launcher.config.local.json for machine-specific values.",
     "Keep token values, API keys, and secrets out of launcher config.",
+    "PLACEHOLDER_TOKEN_DO_NOT_USE is a placeholder only; replace it locally if your adapter requires a token, and do not commit real tokens.",
+    "Dispatcher Bridge health checks use 127.0.0.1 only. Do not expose or tunnel port 8787.",
     "Future local, VM, and cloud migration should be handled by changing config values only."
   ]
 }
