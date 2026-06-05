@@ -53,6 +53,14 @@ The same startup model should work across environments by changing config values
 - `launcher.config.example.json` shows example config structure without secrets.
 - `.gitignore` excludes local launcher config and transient logs.
 - `docs/launcher-plan.md` records the phased plan.
+- `docs/operator-guide.md` covers setup, verification, startup, shutdown, connector reminders, and troubleshooting.
+- `docs/migration-guide.md` covers config-only migration across local PC, ZTE laptop, VM, and cloud-like host.
+
+## Documentation
+
+- [Operator Guide](docs/operator-guide.md)
+- [Migration Guide](docs/migration-guide.md)
+- [Launcher Plan](docs/launcher-plan.md)
 
 ## Startup Usage
 
@@ -130,3 +138,17 @@ The config loader supports basic variable substitution for these values:
 Substitution is applied to service `workingDirectory`, service `command`, service `arguments`, health check `url`, and health check header values. The resolved service startup plan prints enabled services with service name, working directory, and command. Disabled services are listed as skipped. Arguments and environment values are not printed to avoid leaking secrets.
 
 The example config includes disabled health checks for Dispatcher Bridge status on `http://127.0.0.1:8787/status` and the MCP HTTP Adapter on `http://127.0.0.1:3000/health`. Keep Dispatcher Bridge bound to localhost; do not expose or tunnel port 8787. If a header token is needed, use a local-only value and never commit the real token.
+
+## MVP Checklist
+
+- [x] Launcher subproject exists under `launcher/`.
+- [x] Example config exists without real secrets.
+- [x] Local config is ignored by git.
+- [x] `-PlanOnly` prints the resolved service and health check plan without startup.
+- [x] Normal startup starts explicitly enabled services and runs health checks.
+- [x] `-HealthOnly` checks already-running services without starting new windows.
+- [x] Operator guide documents setup, verification, startup, shutdown, connector reload, ChatGPT MCP URL, and troubleshooting.
+- [x] Migration guide documents config-only migration for local PC, ZTE laptop, VM, and cloud-like host.
+- [x] Safety docs warn that Dispatcher Bridge port `8787` must never be exposed or tunneled.
+- [x] Migration docs state that only MCP HTTP adapter port `8790` may be tunneled.
+- [x] No token values or secrets are committed in launcher documentation.
