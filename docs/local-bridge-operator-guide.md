@@ -9,37 +9,55 @@ JJ AI Dispatcher is a local execution controller for small, controlled coding ta
 Current role split:
 
 - ChatGPT = Brain. It plans, decides, reviews, and instructs.
-- Dispatcher = Execution Controller. It accepts a constrained task, writes dispatcher inbox files, starts the worker, records run artifacts, and owns Git commit behavior.
+- Dispatcher MCP = Tool Channel. It exposes the approved tool surface to ChatGPT through the MCP HTTP Adapter.
+- Dispatcher = Execution Controller and Git owner. It accepts a constrained task, writes dispatcher inbox files, starts the worker, records run artifacts, and owns Git commit behavior.
 - Codex = Coding Worker. It performs local code/documentation edits inside the selected repository.
 - Git = Control Point. The dispatcher uses Git status, diff, add, commit, and optional push controls to keep changes observable.
+- Launcher = Environment Startup Helper. It starts configured local services and health checks without changing Dispatcher runtime behavior.
+- Browser postback = optional delivery channel. It can show results in the browser when available, but persisted run retrieval is the recovery path.
 
 Project repository:
 
 - Local: `D:\dev\projects\jj-ai-dispatcher`
 - GitHub: `https://github.com/Gumb-D/jj-ai-dispatcher`
 
-## Current Stable Baseline
+## Current Runtime Standing
 
-Stable baseline:
+Current runtime standing:
 
 - Branch: `main`
-- Baseline tag: `v0.3-phase3-bridge`
 - Bridge type: Local HTTP Bridge
 - Bind address: `127.0.0.1` only
 - Token required by default
 - Dispatch support: Codex only
 - Concurrency model: single active task
 - Queue: none
-- MCP: none
-- Tunnel: none
-- Remote exposure: none
+- MCP: approved four-tool Dispatcher MCP surface through the MCP HTTP Adapter
+- Tunnel: only the MCP HTTP Adapter on port `8790` may be tunneled for controlled feasibility testing
+- Remote exposure: raw Dispatcher Bridge port `8787` must never be exposed
 
-The bridge currently exposes only:
+The bridge currently exposes:
 
 - `GET /status`
 - `POST /dispatch`
 - `GET /runs/latest`
 - `GET /runs/{taskId}`
+- `POST /postback`
+- `GET /postback/pending`
+- `POST /postback/complete`
+
+The current ChatGPT MCP chain is:
+
+```text
+ChatGPT
+  -> MCP HTTPS / approved connector
+  -> MCP HTTP Adapter on 127.0.0.1:8790
+  -> Dispatcher Bridge on 127.0.0.1:8787
+  -> Codex worker
+  -> Dispatcher-owned Git commit / optional push
+  -> persistent run result
+  -> optional browser-visible postback
+```
 
 ## Configuration
 
@@ -268,9 +286,23 @@ The run directory contains:
 
 Run artifacts are ignored by Git through `dispatcher/runs/`.
 
-## Phase 4.1 Smoke Test Results
+## Browser Postback and Recovery
 
-Phase 4.1 local operator smoke testing confirmed:
+Browser postback is optional delivery. It is not required for execution completion and it is not proof of execution success or failure.
+
+Execution can continue while Windows is locked when the local worker remains operational. Browser DOM typing and send-button interaction are not lock-screen tolerant, so a browser postback timeout should be treated as a delivery problem. It does not prove that Codex execution, Dispatcher Git handling, or result persistence failed.
+
+Recovery path after browser postback timeout, browser suspension, Windows unlock, or MCP reconnect:
+
+1. Confirm the bridge and adapter are running.
+2. Call `dispatcher_latest_result` from MCP, or `GET /runs/latest` from the local bridge.
+3. If a task ID is known, call `dispatcher_get_run`, or `GET /runs/{taskId}`.
+4. Review `status`, `filesChanged`, `commit`, `workingTreeClean`, `summary`, logs, and `needsReview`.
+5. Dispatch another task only after reviewing the persisted result.
+
+## Historical Local Smoke Test Results
+
+Earlier local operator smoke testing confirmed:
 
 - `GET /status`: PASS
 - `GET /runs/latest`: PASS
@@ -343,21 +375,11 @@ The Local HTTP Bridge is intentionally local and narrow.
 - Never commit a real bridge token.
 - Put real local bridge secrets only in `dispatcher/config.local.json`.
 - Keep `dispatcher/config.local.json` ignored by Git.
-- There is no tunnel yet.
-- There is no MCP bridge yet.
+- Tunnel only the MCP HTTP Adapter on port `8790` for approved controlled feasibility testing.
+- Do not tunnel the Dispatcher Bridge on port `8787`.
 - There is no GitHub bridge yet.
-- Do not add port forwarding, reverse proxies, public tunnels, or remote access around this bridge.
+- Do not add port forwarding, reverse proxies, public tunnels, or remote access around the raw bridge.
 
-## Future Direction
+## Stabilization Direction
 
-The intended next milestone is Phase 4: ChatGPT Tool Integration / Operator Layer.
-
-Possible future routes include:
-
-- Continued local `curl` or PowerShell manual usage.
-- MCP integration.
-- Connector integration.
-- HTTPS tool integration.
-- Tunnel-based access later.
-
-The local operator workflow must stabilize first. Until then, the stable operating model remains local-only, token-protected, Codex-only, single-task dispatch over `127.0.0.1`.
+Current stabilization follows the approved P0-P3 plan. The immediate focus is documentation accuracy, execution/delivery status separation, persistent result retrieval, and automated test coverage. This guide should describe current operation, not authorize new tools, schedulers, queues, dashboards, distributed workers, or autonomous multi-step chaining.

@@ -10,24 +10,14 @@ Working chain:
 
 ```text
 ChatGPT
-  |
-  v
-Custom MCP Connector / App
-  |
-  v
-ngrok HTTPS tunnel
-  |
-  v
-MCP HTTP adapter on 127.0.0.1:8790
-  |
-  v
-Dispatcher bridge on 127.0.0.1:8787
-  |
-  v
-Codex worker
-  |
-  v
-Git commit
+  -> Custom MCP Connector / App
+  -> approved HTTPS connector or controlled ngrok tunnel
+  -> MCP HTTP Adapter on 127.0.0.1:8790
+  -> Dispatcher Bridge on 127.0.0.1:8787
+  -> Codex worker
+  -> Dispatcher-owned Git commit / optional push
+  -> persistent run result
+  -> optional browser-visible postback
 ```
 
 ## Pre-Flight Checklist
@@ -122,6 +112,8 @@ Expected:
 | Forbidden / 403 / host mismatch | Restart ngrok with `ngrok http 8790 --host-header="localhost:8790"`. |
 | ChatGPT connector tool list missing | Confirm the MCP Server URL ends with `/mcp`, ngrok forwards to `localhost:8790`, the MCP HTTP adapter is running, and the tool list is exactly the approved four. |
 | Latest result still running | Call `dispatcher_status`, wait until the run completes, then call `dispatcher_latest_result` again. Do not dispatch another task until the latest run is reviewed. |
+| Browser postback timeout | Treat this as delivery failure only. Call `dispatcher_latest_result`, then `dispatcher_get_run` if a specific task ID is needed. |
+| Windows was locked during execution | Execution may have continued if the local worker stayed operational. Browser DOM typing/send is not lock-screen tolerant, so retrieve the persisted result after unlock. |
 
 ## Shutdown Checklist
 
@@ -144,14 +136,15 @@ Stop in this order with `Ctrl+C`:
 - [ ] No autonomous loop.
 - [ ] Stop ngrok when not actively testing.
 - [ ] No Auth is only for controlled feasibility testing.
+- [ ] Browser postback is optional delivery.
+- [ ] Persistent MCP retrieval is the recovery path.
 
 ## Known-Good Snapshot
 
-- Latest known commit: `4794ede`.
 - Validated ngrok command:
 
   ```powershell
   ngrok http 8790 --host-header="localhost:8790"
   ```
 
-- Phase 7 end-to-end integration achieved.
+- Phase 7 end-to-end integration has been validated, but current source of truth for commit/version metadata is Git and package/server metadata, not this checklist.

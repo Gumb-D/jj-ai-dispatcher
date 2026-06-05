@@ -11,6 +11,19 @@ This addresses the ChatGPT connector transport mismatch:
 
 This adapter is local feasibility infrastructure only. It does not expose the Dispatcher bridge publicly.
 
+Current runtime chain:
+
+```text
+ChatGPT
+  -> MCP HTTPS / approved connector
+  -> MCP HTTP Adapter on 127.0.0.1:8790
+  -> Dispatcher Bridge on 127.0.0.1:8787
+  -> Codex worker
+  -> Dispatcher-owned Git commit / optional push
+  -> persistent run result
+  -> optional browser-visible postback
+```
+
 Confirmed connector finding:
 
 - ChatGPT can reach this adapter through an HTTPS ngrok URL when ngrok rewrites the Host header to the local adapter host.
@@ -64,6 +77,8 @@ The smoke test verifies:
 - `dispatcher_dispatch` rejects a non-explicit invalid payload
 - protected local bridge config still requires the bridge token
 
+`dispatcher_latest_result` and `dispatcher_get_run` are the recovery path when browser postback is unavailable.
+
 ## Safety Boundary
 
 The adapter preserves the existing Dispatcher safety model:
@@ -106,6 +121,8 @@ Do not expose `127.0.0.1:8787` publicly.
 Expose port `8790` only for controlled feasibility testing, and stop ngrok after the test.
 
 Do not expose this adapter broadly until an HTTPS exposure strategy, authentication policy, and operator go/no-go review are completed.
+
+Browser-visible postback is optional delivery. Windows lock screen may allow local execution to continue, but browser DOM typing and send-button interaction are not lock-screen tolerant. A postback timeout does not prove execution failure; retrieve the persisted result through MCP instead.
 
 ## Remaining Work Before ChatGPT Connector Use
 

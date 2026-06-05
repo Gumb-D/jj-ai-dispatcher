@@ -8,24 +8,14 @@ Working chain:
 
 ```text
 ChatGPT
-  |
-  v
-Custom MCP Connector / App
-  |
-  v
-ngrok HTTPS tunnel
-  |
-  v
-local MCP HTTP adapter on 127.0.0.1:8790
-  |
-  v
-Dispatcher bridge on 127.0.0.1:8787
-  |
-  v
-Codex worker
-  |
-  v
-Git commit
+  -> Custom MCP Connector / App
+  -> approved HTTPS connector or controlled ngrok tunnel
+  -> local MCP HTTP Adapter on 127.0.0.1:8790
+  -> Dispatcher Bridge on 127.0.0.1:8787
+  -> Codex worker
+  -> Dispatcher-owned Git commit / optional push
+  -> persistent run result
+  -> optional browser-visible postback
 ```
 
 This runbook does not add tools, change authentication, expose the raw Dispatcher bridge, or authorize unattended operation.
@@ -152,6 +142,19 @@ Expected:
 - review gate appears before dispatch execution
 - latest result returns success after completion
 
+## Result Recovery
+
+Browser-visible postback is optional delivery. It can fail or time out even when execution succeeds.
+
+Execution can continue while Windows is locked if the local worker remains operational. Browser DOM typing and send-button interaction are not lock-screen tolerant, so do not treat a postback timeout as proof of execution failure.
+
+Recovery flow:
+
+1. Confirm the connector still reaches the adapter with `dispatcher_status`.
+2. Call `dispatcher_latest_result`.
+3. If a task ID is known, call `dispatcher_get_run`.
+4. Review the persisted result before dispatching another task.
+
 ## Shutdown Sequence
 
 Stop in this order using `Ctrl+C`:
@@ -249,3 +252,9 @@ Stop in this order using `Ctrl+C`:
 - Wait for the task to complete.
 - Use `dispatcher_latest_result` again.
 - Do not dispatch another task until the latest run is reviewed.
+
+### Browser postback timeout
+
+- Treat the timeout as delivery failure only.
+- Use `dispatcher_latest_result` or `dispatcher_get_run` to recover the persisted run result.
+- If Windows was locked, unlock first and verify MCP connectivity before retrieval.

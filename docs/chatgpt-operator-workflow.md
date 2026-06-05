@@ -1,35 +1,40 @@
 # ChatGPT Operator Workflow
 
-Phase 4.2 creates a predictable manual operator workflow between ChatGPT and the JJ AI Dispatcher Local HTTP Bridge. The goal is not remote automation yet. The goal is a stable copy/paste workflow where ChatGPT prepares a task in a standard format, the local operator dispatches it, and the result comes back to ChatGPT for review.
+This guide records the operator workflow for ChatGPT-directed Dispatcher tasks. It covers both the local helper-script path and the current MCP path, where ChatGPT calls the approved Dispatcher MCP tools through the MCP HTTP Adapter.
 
 ## Purpose
 
-Phase 4.2 standardizes local bridge operation so that:
+The workflow standardizes operation so that:
 
 - ChatGPT can prepare dispatcher-ready tasks.
-- The operator can run known PowerShell helper scripts.
+- ChatGPT can call the approved MCP tool surface, or the operator can run known PowerShell helper scripts.
 - The dispatcher remains local-only and token-protected.
 - Result artifacts are read back before ChatGPT decides the next action.
 
-This phase does not add MCP, tunnels, connectors, or remote bridge access.
+The raw Dispatcher Bridge remains local-only on `127.0.0.1:8787`. For controlled ChatGPT feasibility testing, only the MCP HTTP Adapter on `127.0.0.1:8790` may be exposed through the approved HTTPS connector/tunnel boundary.
 
 ## Role Model
 
 - ChatGPT = Brain. It prepares the task, reviews results, and decides next action.
-- Dispatcher = Execution Controller. It accepts constrained local bridge requests, starts the worker, records artifacts, and owns Git commit behavior.
+- Dispatcher MCP = Tool Channel. It exposes `dispatcher_status`, `dispatcher_dispatch`, `dispatcher_latest_result`, and `dispatcher_get_run`.
+- Dispatcher = Execution Controller and Git owner. It accepts constrained requests, starts the worker, records artifacts, and owns Git commit behavior.
 - Codex = Coding Worker. It edits files in the target repository.
 - Git = Control Point. It records and exposes changes for review through status, diff, commit, and run artifacts.
+- Launcher = Environment Startup Helper. It can start configured local services and health checks.
+- Browser postback = optional delivery channel.
 
 ## Current Operating Flow
 
-1. ChatGPT prepares a dispatch payload or helper-script command.
-2. Operator sends `POST /dispatch`.
-3. Operator polls `GET /status` until `taskState = "idle"`.
-4. Operator reads `GET /runs/latest`.
-5. Operator pastes the result back to ChatGPT.
-6. ChatGPT reviews the result and decides the next action.
+1. ChatGPT prepares one explicit dispatch payload.
+2. ChatGPT calls `dispatcher_dispatch`, or the operator sends `POST /dispatch` through a helper script.
+3. ChatGPT or the operator checks status until the task is complete.
+4. ChatGPT calls `dispatcher_latest_result`, or the operator reads `GET /runs/latest`.
+5. If needed, ChatGPT calls `dispatcher_get_run` with the task ID.
+6. ChatGPT reviews the persisted result and decides the next action.
 
 The dispatch response only means the task was accepted and started. The result may not exist immediately. `/runs/latest` can return `not_found` while Codex is still running.
+
+Browser postback may also deliver a visible summary when the browser is available. It is optional delivery only. A browser postback timeout does not prove execution failure, especially when Windows is locked or the browser cannot perform DOM typing/send interaction.
 
 ## Standard ChatGPT Dispatch Envelope
 
@@ -167,7 +172,7 @@ Invoke-RestMethod `
 
 ## Helper Scripts
 
-Phase 4.2 adds these local helpers:
+These local helpers are available:
 
 - `scripts/bridge-status.ps1`: calls `GET /status`.
 - `scripts/bridge-dispatch.ps1`: sends `POST /dispatch`.
@@ -176,16 +181,27 @@ Phase 4.2 adds these local helpers:
 
 Each helper reads bridge host, port, and token from local dispatcher configuration. The token is used only as the `X-Dispatcher-Token` request header and is not printed.
 
+## MCP Result Recovery
+
+Use persistent result retrieval as the recovery path whenever browser postback is unavailable:
+
+```text
+dispatcher_latest_result
+dispatcher_get_run
+```
+
+Execution can continue while Windows is locked if the local worker remains operational. Browser DOM typing and send-button interaction are not lock-screen tolerant. After unlocking, confirm MCP connectivity with `dispatcher_status`, then retrieve the persisted result with `dispatcher_latest_result` or `dispatcher_get_run`.
+
 ## Safety Boundaries
 
 - Localhost only: use `127.0.0.1`.
 - Token required by default.
 - Real tokens belong only in `dispatcher/config.local.json`.
 - Do not commit `dispatcher/config.local.json`.
-- No remote bridge.
-- No MCP yet.
-- No tunnel yet.
-- Do not add port forwarding, reverse proxies, public tunnels, or remote access around the bridge.
+- No remote raw bridge.
+- MCP is limited to the approved Dispatcher tool surface.
+- Only the MCP HTTP Adapter on port `8790` may be exposed for controlled feasibility testing.
+- Do not add port forwarding, reverse proxies, public tunnels, or remote access around the raw bridge on port `8787`.
 
 ## Operator Checklist
 
