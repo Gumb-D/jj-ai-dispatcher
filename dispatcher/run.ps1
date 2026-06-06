@@ -205,6 +205,23 @@ function Write-RunSummary {
         "- No review hints recorded."
     }
 
+    $deliveryChannel = if ([string]::IsNullOrWhiteSpace($ResultContract.deliveryChannel)) {
+        "None"
+    }
+    else {
+        $ResultContract.deliveryChannel
+    }
+
+    $recovery = switch ($ResultContract.deliveryStatus) {
+        "delivered" { "Browser postback delivered. Persistent result remains available through dispatcher_latest_result and dispatcher_get_run." }
+        "pending" { "Browser postback pending. If browser delivery does not complete, retrieve the persisted result through dispatcher_latest_result or dispatcher_get_run." }
+        "timeout" { "Browser postback timed out. Execution result remains authoritative through dispatcher_latest_result and dispatcher_get_run." }
+        "failed" { "Browser postback failed. Execution result remains authoritative through dispatcher_latest_result and dispatcher_get_run." }
+        "skipped" { "Browser postback skipped. Persistent result is available through dispatcher_latest_result and dispatcher_get_run." }
+        "unavailable" { "Browser postback unavailable. Persistent result is available through dispatcher_latest_result and dispatcher_get_run." }
+        default { "No browser postback was requested. Persistent result is available through dispatcher_latest_result and dispatcher_get_run." }
+    }
+
     $content = @"
 # Dispatcher Run Summary
 
@@ -212,10 +229,25 @@ Task ID: $($ResultContract.taskId)
 Status: $($ResultContract.status)
 Execution Status: $($ResultContract.executionStatus)
 Delivery Status: $($ResultContract.deliveryStatus)
-Delivery Channel: $($ResultContract.deliveryChannel)
+Delivery Channel: $deliveryChannel
 Delivery Required: $($ResultContract.deliveryRequired)
 Repo: $($ResultContract.repo)
 Worker: $($ResultContract.worker)
+
+## Execution
+
+Status: $($ResultContract.executionStatus)
+Top-level Status: $($ResultContract.status)
+
+## Delivery
+
+Status: $($ResultContract.deliveryStatus)
+Channel: $deliveryChannel
+Required: $($ResultContract.deliveryRequired)
+
+## Recovery
+
+$recovery
 
 ## Task
 
@@ -1085,11 +1117,32 @@ if ($runContext) {
             
             $jsonBody = $postbackPayload | ConvertTo-Json -Depth 6
             $postbackResult = Invoke-RestMethod -Uri $postbackUrl -Method Post -Headers $headers -Body $jsonBody -TimeoutSec 10
-            Write-Step "Postback successfully queued: $($postbackResult.message)"
+            Write-Step "Postback successfully queued. Execution=$($resultContract.executionStatus); Delivery=$($resultContract.deliveryStatus); Recovery=dispatcher_latest_result or dispatcher_get_run remains available."
         }
         catch {
-            $resultContract.deliveryStatus = "failed"
-            Write-Step "Postback trigger warning: $($_.Exception.Message)"
+            $postbackError = $_.Exception.Message
+            $postbackDeliveryStatus = "failed"
+            if ($postbackError -match "timed out|timeout") {
+                $postbackDeliveryStatus = "timeout"
+            }
+            elseif ($postbackError -match "actively refused|connection refused|Unable to connect|No connection|Name or service not known|nodename nor servname") {
+                $postbackDeliveryStatus = "unavailable"
+            }
+
+            $resultContract.deliveryStatus = $postbackDeliveryStatus
+            if (-not $resultContract.PSObject.Properties.Name.Contains("deliveryUpdatedAt")) {
+                $resultContract | Add-Member -NotePropertyName "deliveryUpdatedAt" -NotePropertyValue (Get-Date).ToString("o")
+            }
+            else {
+                $resultContract.deliveryUpdatedAt = (Get-Date).ToString("o")
+            }
+            if (-not $resultContract.PSObject.Properties.Name.Contains("deliveryDetail")) {
+                $resultContract | Add-Member -NotePropertyName "deliveryDetail" -NotePropertyValue $postbackError
+            }
+            else {
+                $resultContract.deliveryDetail = $postbackError
+            }
+            Write-Step "Postback trigger warning. Execution=$($resultContract.executionStatus); Delivery=$($resultContract.deliveryStatus); Recovery=dispatcher_latest_result or dispatcher_get_run remains available. Detail: $postbackError"
             Write-JsonFile -Path $runContext.ResultJson -Value $resultContract
             Write-RunSummary -RunContext $runContext -ResultContract $resultContract -TaskText $taskText
         }

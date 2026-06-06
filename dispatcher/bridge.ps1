@@ -25,6 +25,79 @@ function Write-BridgeStep {
     Write-Host "[bridge] $Message"
 }
 
+function Write-JsonFile {
+    param(
+        [string]$Path,
+        [object]$Value
+    )
+
+    $json = $Value | ConvertTo-Json -Depth 10
+    Set-Content -LiteralPath $Path -Value $json -Encoding UTF8
+}
+
+function Get-DeliveryRecoveryMessage {
+    param(
+        [string]$DeliveryStatus,
+        [string]$Detail = ""
+    )
+
+    switch ($DeliveryStatus) {
+        "delivered" { return "Browser postback delivered. Persistent result remains available through dispatcher_latest_result and dispatcher_get_run." }
+        "pending" { return "Browser postback pending. If browser delivery does not complete, retrieve the persisted result through dispatcher_latest_result or dispatcher_get_run." }
+        "timeout" { return "Browser postback timed out. Execution result remains authoritative through dispatcher_latest_result and dispatcher_get_run." }
+        "failed" {
+            if ([string]::IsNullOrWhiteSpace($Detail)) {
+                return "Browser postback failed. Execution result remains authoritative through dispatcher_latest_result and dispatcher_get_run."
+            }
+            return "Browser postback failed: $Detail. Execution result remains authoritative through dispatcher_latest_result and dispatcher_get_run."
+        }
+        "skipped" { return "Browser postback skipped. Persistent result is available through dispatcher_latest_result and dispatcher_get_run." }
+        "unavailable" { return "Browser postback unavailable. Persistent result is available through dispatcher_latest_result and dispatcher_get_run." }
+        default { return "Persistent result is available through dispatcher_latest_result and dispatcher_get_run." }
+    }
+}
+
+function Update-RunSummaryDelivery {
+    param(
+        [string]$TaskId,
+        [object]$Result,
+        [string]$DeliveryStatus,
+        [string]$Detail = ""
+    )
+
+    $runsRoot = Get-RunsRoot
+    $summaryPath = Join-Path (Join-Path $runsRoot $TaskId) "summary.md"
+    if (-not (Test-Path -LiteralPath $summaryPath -PathType Leaf)) {
+        return
+    }
+
+    $content = Get-Content -LiteralPath $summaryPath -Raw
+    $content = $content -replace "(?m)^Execution Status: .*$", "Execution Status: $($Result.executionStatus)"
+    $content = $content -replace "(?m)^Delivery Status: .*$", "Delivery Status: $DeliveryStatus"
+    $content = $content -replace "(?m)^Delivery Channel: .*$", "Delivery Channel: $($Result.deliveryChannel)"
+    $content = $content -replace "(?m)^Delivery Required: .*$", "Delivery Required: $($Result.deliveryRequired)"
+
+    $content = [regex]::Replace(
+        $content,
+        "(?ms)(^## Delivery\r?\n\r?\nStatus: ).*?(\r?\nChannel: ).*?(\r?\nRequired: ).*?(\r?\n)",
+        {
+            param($Match)
+            return "$($Match.Groups[1].Value)$DeliveryStatus$($Match.Groups[2].Value)$($Result.deliveryChannel)$($Match.Groups[3].Value)$($Result.deliveryRequired)$($Match.Groups[4].Value)"
+        }
+    )
+
+    $recoveryMessage = Get-DeliveryRecoveryMessage -DeliveryStatus $DeliveryStatus -Detail $Detail
+    $recoveryBlock = "## Recovery`r`n`r`n$recoveryMessage"
+    if ($content -match "(?ms)^## Recovery\r?\n\r?\n.*?(?=^## |\z)") {
+        $content = [regex]::Replace($content, "(?ms)^## Recovery\r?\n\r?\n.*?(?=^## |\z)", $recoveryBlock)
+    }
+    else {
+        $content = $content.TrimEnd() + "`r`n`r`n" + $recoveryBlock + "`r`n"
+    }
+
+    Set-Content -LiteralPath $summaryPath -Value $content -Encoding UTF8 -NoNewline
+}
+
 function Get-ConfigValue {
     param(
         [object]$Object,
@@ -140,7 +213,11 @@ function Update-BridgeTaskState {
         $nowTicks = [System.DateTime]::Now.Ticks
         $elapsedMs = ($nowTicks - $State.PostbackStartTicks) / [System.TimeSpan]::TicksPerMillisecond
         if ($elapsedMs -gt $State.PostbackTimeoutMs) {
-            Write-BridgeStep "Postback typing timeout exceeded. Reverting task state to idle and clearing queue."
+            $taskId = if ($null -ne $State.ActivePostback -and $State.ActivePostback.PSObject.Properties.Name.Contains("taskId")) { [string]$State.ActivePostback.taskId } else { "" }
+            if (-not [string]::IsNullOrWhiteSpace($taskId)) {
+                Update-RunDeliveryStatus -TaskId $taskId -DeliveryStatus "timeout" -Detail "postback_typing exceeded $($State.PostbackTimeoutMs)ms" | Out-Null
+            }
+            Write-BridgeStep "Postback typing timeout exceeded. Execution unchanged; delivery=timeout. Reverting task state to idle and clearing queue."
             $State.TaskState = "idle"
             $State.ActivePostback = $null
             $State.PostbackStartTicks = 0
@@ -401,6 +478,66 @@ function Normalize-RunResultContract {
     return $Result
 }
 
+function Update-RunDeliveryStatus {
+    param(
+        [string]$TaskId,
+        [string]$DeliveryStatus,
+        [string]$Detail = ""
+    )
+
+    $deliveryStatuses = @("not_requested", "pending", "delivered", "timeout", "failed", "skipped", "unavailable")
+    if ($DeliveryStatus -notin $deliveryStatuses) {
+        throw "Invalid deliveryStatus '$DeliveryStatus'."
+    }
+
+    $resultPath = Get-RunResultPath -TaskId $TaskId
+    if (-not (Test-Path -LiteralPath $resultPath -PathType Leaf)) {
+        Write-BridgeStep "Delivery update skipped for task $TaskId because result.json is unavailable."
+        return $null
+    }
+
+    $result = Get-Content -LiteralPath $resultPath -Raw | ConvertFrom-Json
+    $result = Normalize-RunResultContract -Result $result
+    $previousExecutionStatus = [string]$result.executionStatus
+    $previousStatus = [string]$result.status
+
+    $result.deliveryStatus = $DeliveryStatus
+    if ($DeliveryStatus -eq "not_requested" -or $DeliveryStatus -eq "skipped") {
+        $result.deliveryChannel = $null
+    }
+    else {
+        $result.deliveryChannel = "browser_postback"
+    }
+    $result.deliveryRequired = $false
+
+    $now = (Get-Date).ToString("o")
+    if (-not $result.PSObject.Properties.Name.Contains("deliveryUpdatedAt")) {
+        $result | Add-Member -NotePropertyName "deliveryUpdatedAt" -NotePropertyValue $now
+    }
+    else {
+        $result.deliveryUpdatedAt = $now
+    }
+
+    if (-not [string]::IsNullOrWhiteSpace($Detail)) {
+        if (-not $result.PSObject.Properties.Name.Contains("deliveryDetail")) {
+            $result | Add-Member -NotePropertyName "deliveryDetail" -NotePropertyValue $Detail
+        }
+        else {
+            $result.deliveryDetail = $Detail
+        }
+    }
+
+    if ($result.status -ne $previousStatus -or $result.executionStatus -ne $previousExecutionStatus) {
+        throw "Delivery update attempted to alter execution status for task $TaskId."
+    }
+
+    Write-JsonFile -Path $resultPath -Value $result
+    Update-RunSummaryDelivery -TaskId $TaskId -Result $result -DeliveryStatus $DeliveryStatus -Detail $Detail
+    Write-BridgeStep "Delivery update for task ${TaskId}: Execution=$($result.executionStatus); Delivery=$DeliveryStatus; Recovery=$(Get-DeliveryRecoveryMessage -DeliveryStatus $DeliveryStatus -Detail $Detail)"
+
+    return $result
+}
+
 function Read-RunResult {
     param(
         [System.Net.HttpListenerResponse]$Response,
@@ -455,7 +592,7 @@ function Get-LatestRunTaskId {
     }
 
     $latest = Get-ChildItem -LiteralPath $runsRoot -Directory |
-        Where-Object { Test-TaskId -TaskId $_.Name } |
+        Where-Object { (Test-TaskId -TaskId $_.Name) -and (Test-Path -LiteralPath (Join-Path $_.FullName "result.json") -PathType Leaf) } |
         Sort-Object Name -Descending |
         Select-Object -First 1
 
@@ -575,6 +712,7 @@ function Invoke-PostbackRequest {
     # Add to queue and transition state
     [void]$State.PostbackQueue.Add($task)
     $State.TaskState = "postback_pending"
+    Update-RunDeliveryStatus -TaskId $task.taskId -DeliveryStatus "pending" | Out-Null
 
     Write-BridgeStep "Accepted postback for task $($task.taskId) in mode $($task.postbackMode). Queue size: $($State.PostbackQueue.Count)"
 
@@ -652,9 +790,30 @@ function Invoke-PostbackCompleteRequest {
     }
 
     $taskId = [string]$body.taskId
-    Write-BridgeStep "Received complete confirmation for task $taskId"
+    $deliveryStatus = "delivered"
+    $allowedTerminalDeliveryStatuses = @("delivered", "timeout", "failed", "skipped", "unavailable")
+    if ($body.PSObject.Properties.Name.Contains("deliveryStatus") -and ([string]$body.deliveryStatus) -in $allowedTerminalDeliveryStatuses) {
+        $deliveryStatus = [string]$body.deliveryStatus
+    }
+    elseif ($body.PSObject.Properties.Name.Contains("success") -and $body.success -eq $false) {
+        $deliveryStatus = "failed"
+    }
+    elseif ($body.PSObject.Properties.Name.Contains("status") -and ([string]$body.status) -in $allowedTerminalDeliveryStatuses) {
+        $deliveryStatus = [string]$body.status
+    }
+
+    $detail = ""
+    if ($body.PSObject.Properties.Name.Contains("error") -and -not [string]::IsNullOrWhiteSpace($body.error)) {
+        $detail = [string]$body.error
+    }
+    elseif ($body.PSObject.Properties.Name.Contains("message") -and -not [string]::IsNullOrWhiteSpace($body.message)) {
+        $detail = [string]$body.message
+    }
+
+    Write-BridgeStep "Received complete confirmation for task $taskId with delivery=$deliveryStatus"
 
     if ($null -ne $State.ActivePostback -and $State.ActivePostback.taskId -eq $taskId) {
+        Update-RunDeliveryStatus -TaskId $taskId -DeliveryStatus $deliveryStatus -Detail $detail | Out-Null
         $State.TaskState = "idle"
         $State.ActivePostback = $null
         $State.PostbackStartTicks = 0
@@ -666,6 +825,8 @@ function Invoke-PostbackCompleteRequest {
         Write-JsonResponse -Response $response -StatusCode 200 -Body ([ordered]@{
             success = $true
             message = "Task completion acknowledged."
+            deliveryStatus = $deliveryStatus
+            taskState = $State.TaskState
         })
     } else {
         # Silent success to keep extension idempotent

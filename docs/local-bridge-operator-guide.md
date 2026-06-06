@@ -241,6 +241,8 @@ Invoke-RestMethod `
 
 The response is the latest `result.json`. It includes fields such as `taskId`, `status`, `executionStatus`, `deliveryStatus`, `deliveryChannel`, `deliveryRequired`, `repo`, `worker`, `filesChanged`, `commit`, `workingTreeClean`, `summary`, `logs`, `needsReview`, and `reviewHints`. `status` is retained for backward compatibility and represents execution outcome only.
 
+Delivery updates from browser postback are persisted into the same result artifact. A successful execution with `deliveryStatus = "timeout"` remains `status = "success"` and `executionStatus = "success"`.
+
 `/runs/latest` may return `not_found` while a task is still running. This is expected when the worker has not written `result.json` yet. Poll `GET /status` until `taskState = "idle"`, then retry `GET /runs/latest`.
 
 ### GET /runs/{taskId}
@@ -297,7 +299,7 @@ Recovery path after browser postback timeout, browser suspension, Windows unlock
 1. Confirm the bridge and adapter are running.
 2. Call `dispatcher_latest_result` from MCP, or `GET /runs/latest` from the local bridge.
 3. If a task ID is known, call `dispatcher_get_run`, or `GET /runs/{taskId}`.
-4. Review `status`, `executionStatus`, `deliveryStatus`, `filesChanged`, `commit`, `workingTreeClean`, `summary`, logs, and `needsReview`.
+4. Review Execution, Delivery, and Recovery separately: `status` and `executionStatus` for execution truth, `deliveryStatus` and `deliveryChannel` for optional postback delivery, and persistent retrieval through `GET /runs/latest` or `GET /runs/{taskId}` for recovery.
 5. Dispatch another task only after reviewing the persisted result.
 
 ## Historical Local Smoke Test Results

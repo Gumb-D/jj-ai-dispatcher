@@ -37,6 +37,63 @@ const pendingSuccess = {
   reviewHints: []
 };
 
+const deliveredSuccess = {
+  taskId: "20260606-120003-delivered",
+  status: "success",
+  executionStatus: "success",
+  deliveryStatus: "delivered",
+  deliveryChannel: "browser_postback",
+  deliveryRequired: false,
+  repo: "D:/dev/projects/jj-ai-dispatcher",
+  worker: "codex",
+  filesChanged: ["dispatcher/bridge.ps1"],
+  commit: "123abcd",
+  commitMessage: "test: delivered success",
+  pushed: false,
+  workingTreeClean: true,
+  summary: "Success with delivered optional postback.",
+  needsReview: false,
+  reviewHints: []
+};
+
+const timeoutSuccess = {
+  taskId: "20260606-120004-timeout",
+  status: "success",
+  executionStatus: "success",
+  deliveryStatus: "timeout",
+  deliveryChannel: "browser_postback",
+  deliveryRequired: false,
+  repo: "D:/dev/projects/jj-ai-dispatcher",
+  worker: "codex",
+  filesChanged: ["dispatcher/bridge.ps1"],
+  commit: "456abcd",
+  commitMessage: "test: timeout success",
+  pushed: false,
+  workingTreeClean: true,
+  summary: "Success with timed out optional postback.",
+  needsReview: false,
+  reviewHints: []
+};
+
+const unavailableSuccess = {
+  taskId: "20260606-120005-unavail",
+  status: "success",
+  executionStatus: "success",
+  deliveryStatus: "unavailable",
+  deliveryChannel: "browser_postback",
+  deliveryRequired: false,
+  repo: "D:/dev/projects/jj-ai-dispatcher",
+  worker: "codex",
+  filesChanged: ["dispatcher/run.ps1"],
+  commit: "789abcd",
+  commitMessage: "test: unavailable success",
+  pushed: false,
+  workingTreeClean: true,
+  summary: "Success with unavailable optional postback.",
+  needsReview: false,
+  reviewHints: []
+};
+
 const failedDeliveryFailure = {
   taskId: "20260606-120002-failed",
   status: "failed",
@@ -99,6 +156,33 @@ async function main() {
   });
   console.log("PASS success execution remains success with pending delivery");
 
+  assertRunShape(normalizeRunResult(deliveredSuccess), {
+    label: "delivered success",
+    status: "success",
+    executionStatus: "success",
+    deliveryStatus: "delivered",
+    deliveryRequired: false
+  });
+  console.log("PASS success execution remains success with delivered delivery");
+
+  assertRunShape(normalizeRunResult(timeoutSuccess), {
+    label: "timeout success",
+    status: "success",
+    executionStatus: "success",
+    deliveryStatus: "timeout",
+    deliveryRequired: false
+  });
+  console.log("PASS success execution remains success with timed out delivery");
+
+  assertRunShape(normalizeRunResult(unavailableSuccess), {
+    label: "unavailable success",
+    status: "success",
+    executionStatus: "success",
+    deliveryStatus: "unavailable",
+    deliveryRequired: false
+  });
+  console.log("PASS success execution remains success with unavailable delivery");
+
   assertRunShape(normalizeRunResult(failedDeliveryFailure), {
     label: "failed execution",
     status: "failed",
@@ -109,7 +193,7 @@ async function main() {
   console.log("PASS failed execution is not overwritten by delivery outcome");
 
   await withServer((request, response) => {
-    const body = request.url === "/runs/latest" ? oldSuccess : failedDeliveryFailure;
+    const body = request.url === "/runs/latest" ? timeoutSuccess : deliveredSuccess;
     response.writeHead(200, { "Content-Type": "application/json" });
     response.end(JSON.stringify(body));
   }, async (baseUrl) => {
@@ -126,20 +210,20 @@ async function main() {
       label: "dispatcher_latest_result",
       status: "success",
       executionStatus: "success",
-      deliveryStatus: "not_requested",
+      deliveryStatus: "timeout",
       deliveryRequired: false
     });
-    console.log("PASS dispatcher_latest_result exposes separated status fields");
+    console.log("PASS dispatcher_latest_result exposes final timeout delivery state");
 
-    const run = await client.getRun("20260606-120002-failed");
+    const run = await client.getRun("20260606-120003-delivered");
     assertRunShape(run, {
       label: "dispatcher_get_run",
-      status: "failed",
-      executionStatus: "failed",
-      deliveryStatus: "failed",
+      status: "success",
+      executionStatus: "success",
+      deliveryStatus: "delivered",
       deliveryRequired: false
     });
-    console.log("PASS dispatcher_get_run exposes separated status fields");
+    console.log("PASS dispatcher_get_run exposes final delivered delivery state");
   });
 }
 

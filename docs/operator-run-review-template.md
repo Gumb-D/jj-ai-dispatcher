@@ -56,7 +56,9 @@ Operator Run Review Input
 ChatGPT should check:
 
 - `taskId` present.
-- `status` is understood as `success` or `failed`.
+- `status` is understood as the backward-compatible execution status.
+- `executionStatus` is checked as the execution outcome.
+- `deliveryStatus` is checked separately as optional result delivery.
 - `repo` is correct.
 - `worker` is correct.
 - `filesChanged` matches the requested scope.
@@ -76,6 +78,8 @@ If any item is missing or unclear, ChatGPT should ask the operator for the missi
 Use `ACCEPT` when:
 
 - `status = "success"`.
+- `executionStatus = "success"`.
+- `deliveryStatus` is reviewed separately. A postback `timeout`, `failed`, or `unavailable` delivery status does not by itself make execution fail.
 - `repo` and `worker` are correct.
 - Changed files match the requested scope.
 - A commit exists when files changed.
@@ -114,6 +118,7 @@ Next action: prepare a new, narrow dispatch task that fixes only the identified 
 Use `STOP AND INVESTIGATE` when:
 
 - `status = "failed"`.
+- `executionStatus = "failed"` or the result contract is inconsistent.
 - `repo` is wrong.
 - `worker` is wrong.
 - The result is missing, malformed, or inconsistent.
@@ -142,6 +147,10 @@ Operator paste-back:
 {
   "taskId": "20260526-031500-a1b2c3d4",
   "status": "success",
+  "executionStatus": "success",
+  "deliveryStatus": "timeout",
+  "deliveryChannel": "browser_postback",
+  "deliveryRequired": false,
   "repo": "D:\\dev\\projects\\jj-ai-dispatcher",
   "worker": "codex",
   "filesChanged": [
@@ -164,7 +173,8 @@ Decision: ACCEPT
 
 Reason:
 - taskId is present.
-- status is success.
+- status and executionStatus are success.
+- deliveryStatus is timeout, which is optional browser delivery only; recovery is available through result retrieval.
 - repo and worker are correct.
 - filesChanged matches the requested scope.
 - commit exists because filesChanged is not empty.
@@ -185,6 +195,10 @@ Operator paste-back:
 {
   "taskId": "20260526-032100-d4c3b2a1",
   "status": "failed",
+  "executionStatus": "failed",
+  "deliveryStatus": "not_requested",
+  "deliveryChannel": null,
+  "deliveryRequired": false,
   "repo": "D:\\dev\\projects\\jj-ai-dispatcher",
   "worker": "codex",
   "filesChanged": [

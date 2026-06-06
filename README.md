@@ -129,6 +129,8 @@ dispatcher/runs/<task-id>/result.json
 
 In run results, `status` is retained for compatibility and represents execution outcome only. Newer results also expose `executionStatus`, `deliveryStatus`, `deliveryChannel`, and `deliveryRequired`; older successful results without delivery fields are read as `deliveryStatus: "not_requested"`.
 
+Browser postback delivery is optional and may move through `pending`, `delivered`, `timeout`, `failed`, `skipped`, or `unavailable`. These delivery updates are persisted to `result.json` and reflected by `dispatcher_latest_result` and `dispatcher_get_run`, but they never change top-level `status` or `executionStatus`. A successful execution with a postback timeout remains `status: "success"` and `executionStatus: "success"` with `deliveryStatus: "timeout"`.
+
 ## Dispatcher CLI Usage
 
 Run a Codex task against the configured default repo:
