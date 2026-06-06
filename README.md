@@ -232,16 +232,37 @@ Standard automated test commands:
 npm test
 npm run test:unit
 npm run test:integration
+npm run smoke:local
+```
+
+Compatibility smoke command:
+
+```powershell
 npm run test:smoke
 ```
 
-Syntax and smoke commands:
+Syntax/build checks:
 
 ```powershell
 npm run build
+git diff --check
+```
+
+Manual environment validations remain separate from `npm test`:
+
+```text
+unlocked browser postback
+Windows lock-screen postback timeout
+result recovery after unlock
+```
+
+`npm test` is the standard top-level automated baseline. It runs unit, integration, and local smoke coverage without real remote pushes, public exposure of port `8787`, committed secrets, browser UI automation, or production checkout mutation outside controlled temporary fixtures. `npm run mcp:smoke` is the operator-facing MCP contract smoke check and includes `npm run build`.
+
+MCP smoke commands:
+
+```powershell
 npm run mcp:smoke
 npm run mcp:http:smoke
-git diff --check
 ```
 
 See [docs/testing.md](docs/testing.md) for the unit, integration, smoke, and manual validation split.
