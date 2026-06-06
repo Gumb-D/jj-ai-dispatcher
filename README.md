@@ -226,6 +226,15 @@ Never commit real tokens or secrets.
 
 ## Validation
 
+Standard automated test commands:
+
+```powershell
+npm test
+npm run test:unit
+npm run test:integration
+npm run test:smoke
+```
+
 Syntax and smoke commands:
 
 ```powershell
@@ -234,3 +243,5 @@ npm run mcp:smoke
 npm run mcp:http:smoke
 git diff --check
 ```
+
+See [docs/testing.md](docs/testing.md) for the unit, integration, smoke, and manual validation split.

@@ -5,10 +5,13 @@ param(
 $ErrorActionPreference = "Stop"
 
 $projectRoot = Split-Path $PSScriptRoot -Parent
-$dispatcherRoot = Join-Path $projectRoot "dispatcher"
+$sourceDispatcherRoot = Join-Path $projectRoot "dispatcher"
+$sourceScriptsRoot = Join-Path $projectRoot "scripts"
+$tempRoot = Join-Path ([System.IO.Path]::GetTempPath()) ("jj-dispatcher-lifecycle-" + [guid]::NewGuid().ToString("N"))
+$dispatcherRoot = Join-Path $tempRoot "dispatcher"
+$tempScriptsRoot = Join-Path $tempRoot "scripts"
 $inboxRoot = Join-Path $dispatcherRoot "inbox"
 $runScript = Join-Path $dispatcherRoot "run.ps1"
-$tempRoot = Join-Path ([System.IO.Path]::GetTempPath()) ("jj-dispatcher-lifecycle-" + [guid]::NewGuid().ToString("N"))
 
 $inboxFiles = @(
     "codex-task.txt",
@@ -186,8 +189,11 @@ function Invoke-LifecycleCase {
     }
 }
 
-New-Item -ItemType Directory -Path $tempRoot -Force | Out-Null
-New-Item -ItemType Directory -Path $inboxRoot -Force | Out-Null
+New-Item -ItemType Directory -Path $dispatcherRoot, $tempScriptsRoot, $inboxRoot -Force | Out-Null
+Copy-Item -LiteralPath (Join-Path $sourceDispatcherRoot "run.ps1") -Destination (Join-Path $dispatcherRoot "run.ps1")
+Copy-Item -LiteralPath (Join-Path $sourceDispatcherRoot "config.json") -Destination (Join-Path $dispatcherRoot "config.json")
+Copy-Item -LiteralPath (Join-Path $sourceDispatcherRoot "tasks.json") -Destination (Join-Path $dispatcherRoot "tasks.json")
+Copy-Item -LiteralPath (Join-Path $sourceScriptsRoot "load-config.ps1") -Destination (Join-Path $tempScriptsRoot "load-config.ps1")
 Backup-Inbox
 
 try {
