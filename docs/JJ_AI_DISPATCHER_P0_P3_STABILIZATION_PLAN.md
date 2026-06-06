@@ -306,6 +306,8 @@ Compatibility may require retaining the existing `status` field. If retained:
 status must represent execution outcome, not browser delivery outcome.
 ```
 
+Existing run artifacts that only contain `status` remain readable. Result readers should default `executionStatus` from `status`, default `deliveryStatus` to `not_requested`, default `deliveryChannel` to `null`, and default `deliveryRequired` to `false`.
+
 ## 5.4 State Transition Requirements
 
 Required execution transitions:

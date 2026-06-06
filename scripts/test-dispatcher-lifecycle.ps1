@@ -159,12 +159,18 @@ function Invoke-LifecycleCase {
     $stdoutPath = Join-Path $run.FullName "codex-output.log"
     $stderrPath = Join-Path $run.FullName "codex-error.log"
     $result = Get-Content -LiteralPath $resultPath -Raw | ConvertFrom-Json
+    $expectedExecutionStatus = if ($exitCode -eq 0) { "success" } else { "failed" }
 
     if (-not (Test-Path -LiteralPath $summaryPath -PathType Leaf)) { throw "$Name missing summary.md" }
     if (-not (Test-Path -LiteralPath $stdoutPath -PathType Leaf)) { throw "$Name missing codex-output.log" }
     if (-not (Test-Path -LiteralPath $stderrPath -PathType Leaf)) { throw "$Name missing codex-error.log" }
     if ([string]::IsNullOrWhiteSpace((Get-Content -LiteralPath $stdoutPath -Raw))) { throw "$Name stdout log is empty" }
     if ([string]::IsNullOrWhiteSpace((Get-Content -LiteralPath $stderrPath -Raw))) { throw "$Name stderr log is empty" }
+    if ($result.status -ne $expectedExecutionStatus) { throw "$Name status expected $expectedExecutionStatus but was $($result.status)" }
+    if ($result.executionStatus -ne $expectedExecutionStatus) { throw "$Name executionStatus expected $expectedExecutionStatus but was $($result.executionStatus)" }
+    if ($result.deliveryStatus -ne "not_requested") { throw "$Name deliveryStatus expected not_requested but was $($result.deliveryStatus)" }
+    if ($null -ne $result.deliveryChannel) { throw "$Name deliveryChannel expected null but was $($result.deliveryChannel)" }
+    if ($result.deliveryRequired -ne $false) { throw "$Name deliveryRequired expected false but was $($result.deliveryRequired)" }
 
     [pscustomobject]@{
         case = $Name
@@ -172,6 +178,8 @@ function Invoke-LifecycleCase {
         processExitCode = $exitCode
         taskId = $result.taskId
         status = $result.status
+        executionStatus = $result.executionStatus
+        deliveryStatus = $result.deliveryStatus
         summary = $result.summary
         needsReview = $result.needsReview
         runDir = $run.FullName

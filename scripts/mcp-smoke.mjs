@@ -1,10 +1,7 @@
 #!/usr/bin/env node
-import { spawnSync } from "node:child_process";
-import { existsSync } from "node:fs";
-import path from "node:path";
-
-import { Client } from "@modelcontextprotocol/sdk/client/index.js";
-import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
+import { loadConfig } from "../mcp/config/loadConfig.js";
+import { BridgeClient } from "../mcp/server/bridgeClient.js";
+import { registerDispatcherTools } from "../mcp/tools/index.js";
 
 const EXPECTED_TOOLS = [
   "dispatcher_status",
@@ -36,32 +33,6 @@ function pass(name, detail = "") {
 function fail(name, detail = "") {
   checks.push({ ok: false, name, detail });
   console.error(`FAIL ${name}${detail ? ` - ${detail}` : ""}`);
-}
-
-function runBuild() {
-  const npmCli = findNpmCli();
-  const result = spawnSync(process.execPath, [npmCli, "run", "build"], {
-    cwd: process.cwd(),
-    stdio: "pipe",
-    encoding: "utf8"
-  });
-
-  if (result.status !== 0) {
-    throw new Error("npm run build failed");
-  }
-}
-
-function findNpmCli() {
-  const candidates = [
-    process.env.npm_execpath,
-    path.join(path.dirname(process.execPath), "node_modules", "npm", "bin", "npm-cli.js")
-  ].filter(Boolean);
-
-  const npmCli = candidates.find((candidate) => existsSync(candidate));
-  if (!npmCli) {
-    throw new Error("npm CLI could not be located");
-  }
-  return npmCli;
 }
 
 function parseToolPayload(result, label) {
@@ -114,6 +85,7 @@ function assertLatestResult(payload) {
     throw new Error("dispatcher_latest_result returned a token field");
   }
   if (typeof payload.taskId === "string" && payload.taskId.length > 0) {
+    assertRunStatusFields(payload, "dispatcher_latest_result");
     return "latest run present";
   }
   if (payload.status === "error" && payload.errorType === "bridge_error" && payload.bridgeStatus === 404) {
@@ -122,49 +94,90 @@ function assertLatestResult(payload) {
   throw new Error("dispatcher_latest_result did not return a run or expected no-run state");
 }
 
+function assertRunStatusFields(payload, label) {
+  const executionStatuses = new Set(["queued", "running", "success", "failed", "cancelled"]);
+  const deliveryStatuses = new Set(["not_requested", "pending", "delivered", "timeout", "failed", "skipped", "unavailable"]);
+
+  if (!executionStatuses.has(payload.executionStatus)) {
+    throw new Error(`${label} returned invalid executionStatus ${String(payload.executionStatus)}`);
+  }
+  if (payload.status !== payload.executionStatus) {
+    throw new Error(`${label} status did not mirror executionStatus`);
+  }
+  if (!deliveryStatuses.has(payload.deliveryStatus)) {
+    throw new Error(`${label} returned invalid deliveryStatus ${String(payload.deliveryStatus)}`);
+  }
+  if (typeof payload.deliveryRequired !== "boolean") {
+    throw new Error(`${label} returned non-boolean deliveryRequired`);
+  }
+  if (!Object.prototype.hasOwnProperty.call(payload, "deliveryChannel")) {
+    throw new Error(`${label} omitted deliveryChannel`);
+  }
+}
+
 async function main() {
-  let client;
-
   try {
-    runBuild();
-    pass("npm build");
+    const config = await loadConfig();
+    const bridgeClient = new BridgeClient(config);
+    const server = new InProcessToolRegistry();
+    registerDispatcherTools(server, bridgeClient);
+    pass("mcp in-process registry");
 
-    client = new Client({ name: "jj-ai-dispatcher-mcp-smoke", version: "1.0.0" }, { capabilities: {} });
-    const transport = new StdioClientTransport({
-      command: "node",
-      args: ["mcp/server/index.js"],
-      cwd: process.cwd(),
-      stderr: "pipe"
-    });
-
-    await client.connect(transport);
-    pass("mcp stdio connect");
-
-    const listed = await client.listTools();
-    assertExactTools(listed.tools);
+    assertExactTools(server.listTools().tools);
     pass("tool registration", EXPECTED_TOOLS.join(", "));
 
     const status = parseToolPayload(
-      await client.callTool({ name: "dispatcher_status", arguments: {} }),
+      await server.callTool({ name: "dispatcher_status", arguments: {} }),
       "dispatcher_status"
     );
     assertStatus(status);
     pass("dispatcher_status", `taskState=${status.taskState ?? "unknown"}`);
 
     const latest = parseToolPayload(
-      await client.callTool({ name: "dispatcher_latest_result", arguments: {} }),
+      await server.callTool({ name: "dispatcher_latest_result", arguments: {} }),
       "dispatcher_latest_result"
     );
     pass("dispatcher_latest_result", assertLatestResult(latest));
 
-    await client.close();
+    if (typeof latest.taskId === "string" && latest.taskId.length > 0) {
+      const run = parseToolPayload(
+        await server.callTool({ name: "dispatcher_get_run", arguments: { taskId: latest.taskId } }),
+        "dispatcher_get_run"
+      );
+      assertRunStatusFields(run, "dispatcher_get_run");
+      pass("dispatcher_get_run", `taskId=${run.taskId}`);
+    }
     pass("mcp smoke complete");
   } catch (error) {
     fail("mcp smoke", error?.message || "unknown failure");
-    if (client) {
-      await client.close().catch(() => {});
-    }
     process.exitCode = 1;
+  }
+}
+
+class InProcessToolRegistry {
+  constructor() {
+    this.tools = new Map();
+  }
+
+  registerTool(name, config, handler) {
+    this.tools.set(name, { name, config, handler });
+  }
+
+  listTools() {
+    return {
+      tools: [...this.tools.values()].map((tool) => ({
+        name: tool.name,
+        description: tool.config.description
+      }))
+    };
+  }
+
+  callTool({ name, arguments: args }) {
+    const tool = this.tools.get(name);
+    if (!tool) {
+      throw new Error(`tool not registered: ${name}`);
+    }
+    return tool.handler(args);
   }
 }
 

@@ -18,11 +18,11 @@ export class BridgeClient {
   }
 
   latestResult() {
-    return this.#request("GET", "/runs/latest");
+    return this.#request("GET", "/runs/latest").then(normalizeRunResult);
   }
 
   getRun(taskId) {
-    return this.#request("GET", `/runs/${encodeURIComponent(taskId)}`);
+    return this.#request("GET", `/runs/${encodeURIComponent(taskId)}`).then(normalizeRunResult);
   }
 
   async #request(method, pathname, payload) {
@@ -89,4 +89,31 @@ function sanitizeBridgeMessage(message) {
     return "";
   }
   return message.replace(/X-Dispatcher-Token/gi, "bridge token header").trim();
+}
+
+const EXECUTION_STATUSES = new Set(["queued", "running", "success", "failed", "cancelled"]);
+const DELIVERY_STATUSES = new Set(["not_requested", "pending", "delivered", "timeout", "failed", "skipped", "unavailable"]);
+
+export function normalizeRunResult(result) {
+  if (!result || typeof result !== "object" || typeof result.taskId !== "string") {
+    return result;
+  }
+
+  const executionStatus = EXECUTION_STATUSES.has(result.executionStatus)
+    ? result.executionStatus
+    : EXECUTION_STATUSES.has(result.status)
+      ? result.status
+      : "failed";
+  const deliveryStatus = DELIVERY_STATUSES.has(result.deliveryStatus)
+    ? result.deliveryStatus
+    : "not_requested";
+
+  return {
+    ...result,
+    status: executionStatus,
+    executionStatus,
+    deliveryStatus,
+    deliveryChannel: Object.prototype.hasOwnProperty.call(result, "deliveryChannel") ? result.deliveryChannel : null,
+    deliveryRequired: Object.prototype.hasOwnProperty.call(result, "deliveryRequired") ? Boolean(result.deliveryRequired) : false
+  };
 }

@@ -349,6 +349,58 @@ function Get-RunResultPath {
     return Join-Path $resolvedRunPath "result.json"
 }
 
+function Normalize-RunResultContract {
+    param([object]$Result)
+
+    if ($null -eq $Result -or -not $Result.PSObject.Properties.Name.Contains("taskId")) {
+        return $Result
+    }
+
+    $executionStatuses = @("queued", "running", "success", "failed", "cancelled")
+    $deliveryStatuses = @("not_requested", "pending", "delivered", "timeout", "failed", "skipped", "unavailable")
+
+    $status = if ($Result.PSObject.Properties.Name.Contains("status")) { [string]$Result.status } else { "" }
+    $executionStatus = if ($Result.PSObject.Properties.Name.Contains("executionStatus")) { [string]$Result.executionStatus } else { "" }
+    if ($executionStatus -notin $executionStatuses) {
+        $executionStatus = if ($status -in $executionStatuses) { $status } else { "failed" }
+    }
+
+    if ($Result.PSObject.Properties.Name.Contains("status")) {
+        $Result.status = $executionStatus
+    }
+    else {
+        $Result | Add-Member -NotePropertyName "status" -NotePropertyValue $executionStatus
+    }
+
+    if ($Result.PSObject.Properties.Name.Contains("executionStatus")) {
+        $Result.executionStatus = $executionStatus
+    }
+    else {
+        $Result | Add-Member -NotePropertyName "executionStatus" -NotePropertyValue $executionStatus
+    }
+
+    $deliveryStatus = if ($Result.PSObject.Properties.Name.Contains("deliveryStatus")) { [string]$Result.deliveryStatus } else { "" }
+    if ($deliveryStatus -notin $deliveryStatuses) {
+        $deliveryStatus = "not_requested"
+    }
+    if ($Result.PSObject.Properties.Name.Contains("deliveryStatus")) {
+        $Result.deliveryStatus = $deliveryStatus
+    }
+    else {
+        $Result | Add-Member -NotePropertyName "deliveryStatus" -NotePropertyValue $deliveryStatus
+    }
+
+    if (-not $Result.PSObject.Properties.Name.Contains("deliveryChannel")) {
+        $Result | Add-Member -NotePropertyName "deliveryChannel" -NotePropertyValue $null
+    }
+
+    if (-not $Result.PSObject.Properties.Name.Contains("deliveryRequired")) {
+        $Result | Add-Member -NotePropertyName "deliveryRequired" -NotePropertyValue $false
+    }
+
+    return $Result
+}
+
 function Read-RunResult {
     param(
         [System.Net.HttpListenerResponse]$Response,
@@ -393,7 +445,7 @@ function Read-RunResult {
         return
     }
 
-    Write-JsonResponse -Response $Response -StatusCode 200 -Body $result
+    Write-JsonResponse -Response $Response -StatusCode 200 -Body (Normalize-RunResultContract -Result $result)
 }
 
 function Get-LatestRunTaskId {

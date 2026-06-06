@@ -14,10 +14,11 @@
   "scripts": {
     "mcp:start": "node mcp/server/index.js",
     "mcp:http": "node mcp/server/http.js",
-    "mcp:smoke": "node scripts/mcp-smoke.mjs",
+    "mcp:smoke": "npm run build && node scripts/mcp-smoke.mjs",
     "mcp:http:smoke": "node scripts/mcp-http-smoke.mjs",
+    "result-contract": "node scripts/validate-result-contract.mjs",
     "review:latest": "node scripts/review-latest-run.mjs",
-    "build": "node --check mcp/server/index.js && node --check mcp/server/http.js && node --check mcp/server/server.js && node --check mcp/server/bridgeClient.js && node --check mcp/server/errors.js && node --check mcp/config/loadConfig.js && node --check mcp/tools/index.js && node --check mcp/tools/schemas.js && node --check scripts/mcp-http-smoke.mjs && node --check scripts/review-latest-run.mjs"
+    "build": "node --check mcp/server/index.js && node --check mcp/server/http.js && node --check mcp/server/server.js && node --check mcp/server/bridgeClient.js && node --check mcp/server/errors.js && node --check mcp/config/loadConfig.js && node --check mcp/tools/index.js && node --check mcp/tools/schemas.js && node --check scripts/mcp-smoke.mjs && node --check scripts/mcp-http-smoke.mjs && node --check scripts/review-latest-run.mjs && node --check scripts/validate-result-contract.mjs"
   },
   "repository": {
     "type": "git",

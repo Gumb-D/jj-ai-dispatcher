@@ -133,6 +133,10 @@ function Normalize-WorkerResult {
     return [pscustomobject][ordered]@{
         taskId = $TaskId
         status = $status
+        executionStatus = $status
+        deliveryStatus = "not_requested"
+        deliveryChannel = $null
+        deliveryRequired = $false
         repo = $RepoPath
         worker = $Worker
         filesChanged = @()
@@ -206,6 +210,10 @@ function Write-RunSummary {
 
 Task ID: $($ResultContract.taskId)
 Status: $($ResultContract.status)
+Execution Status: $($ResultContract.executionStatus)
+Delivery Status: $($ResultContract.deliveryStatus)
+Delivery Channel: $($ResultContract.deliveryChannel)
+Delivery Required: $($ResultContract.deliveryRequired)
 Repo: $($ResultContract.repo)
 Worker: $($ResultContract.worker)
 
@@ -795,6 +803,7 @@ if ($task.worker -eq "codex_inbox") {
     $taskContract = [ordered]@{
         taskId = $taskId
         status = "created"
+        executionStatus = "queued"
         createdAt = (Get-Date).ToString("o")
         startedAt = $null
         completedAt = $null
@@ -843,6 +852,7 @@ switch ($task.worker) {
     "codex_inbox" {
         $runStartedAt = Get-Date
         $taskContract.status = "running"
+        $taskContract.executionStatus = "running"
         $taskContract.startedAt = $runStartedAt.ToString("o")
         Write-JsonFile -Path $runContext.TaskJson -Value $taskContract
 
@@ -994,6 +1004,7 @@ if ($runContext) {
 
     if ($result.ExitCode -ne 0) {
         $resultContract.status = "failed"
+        $resultContract.executionStatus = "failed"
         $resultContract.needsReview = $true
         if ($resultContract.reviewHints.Count -eq 0) {
             $hint = if ([string]::IsNullOrWhiteSpace($result.Stderr)) { "Codex task did not complete successfully." } else { $result.Stderr.Trim() }
@@ -1022,7 +1033,26 @@ if ($runContext) {
         $runStartedAt = $completedAt
     }
 
+    # Phase 4 Visible Closed Loop Postback Trigger
+    $bridgeConfig = if ($config.PSObject.Properties.Name.Contains("bridge")) { $config.bridge } else { $null }
+    $bridgeEnabled = if ($null -ne $bridgeConfig -and $bridgeConfig.PSObject.Properties.Name.Contains("enabled")) { [bool]$bridgeConfig.enabled } else { $false }
+    if ([Environment]::GetEnvironmentVariable("JJ_DISPATCHER_DISABLE_POSTBACK") -eq "true") {
+        $bridgeEnabled = $false
+    }
+
+    $resultContract.executionStatus = $resultContract.status
+    if ($bridgeEnabled) {
+        $resultContract.deliveryStatus = "pending"
+        $resultContract.deliveryChannel = "browser_postback"
+    }
+    else {
+        $resultContract.deliveryStatus = "not_requested"
+        $resultContract.deliveryChannel = $null
+    }
+    $resultContract.deliveryRequired = $false
+
     $taskContract.status = $resultContract.status
+    $taskContract.executionStatus = $resultContract.executionStatus
     $taskContract.completedAt = $completedAt.ToString("o")
     $taskContract.durationMs = [int64]($completedAt - $runStartedAt).TotalMilliseconds
 
@@ -1030,13 +1060,6 @@ if ($runContext) {
     Write-JsonFile -Path $runContext.ResultJson -Value $resultContract
     Write-RunSummary -RunContext $runContext -ResultContract $resultContract -TaskText $taskText
 
-    # Phase 4 Visible Closed Loop Postback Trigger
-    $bridgeConfig = if ($config.PSObject.Properties.Name.Contains("bridge")) { $config.bridge } else { $null }
-    $bridgeEnabled = if ($null -ne $bridgeConfig -and $bridgeConfig.PSObject.Properties.Name.Contains("enabled")) { [bool]$bridgeConfig.enabled } else { $false }
-    if ([Environment]::GetEnvironmentVariable("JJ_DISPATCHER_DISABLE_POSTBACK") -eq "true") {
-        $bridgeEnabled = $false
-    }
-    
     if ($bridgeEnabled) {
         $port = if ($bridgeConfig.PSObject.Properties.Name.Contains("port")) { [int]$bridgeConfig.port } else { 8787 }
         $postbackUrl = "http://127.0.0.1:$port/postback"
@@ -1065,7 +1088,10 @@ if ($runContext) {
             Write-Step "Postback successfully queued: $($postbackResult.message)"
         }
         catch {
+            $resultContract.deliveryStatus = "failed"
             Write-Step "Postback trigger warning: $($_.Exception.Message)"
+            Write-JsonFile -Path $runContext.ResultJson -Value $resultContract
+            Write-RunSummary -RunContext $runContext -ResultContract $resultContract -TaskText $taskText
         }
     }
 }

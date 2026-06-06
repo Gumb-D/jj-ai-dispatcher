@@ -127,6 +127,8 @@ The persisted result path is:
 dispatcher/runs/<task-id>/result.json
 ```
 
+In run results, `status` is retained for compatibility and represents execution outcome only. Newer results also expose `executionStatus`, `deliveryStatus`, `deliveryChannel`, and `deliveryRequired`; older successful results without delivery fields are read as `deliveryStatus: "not_requested"`.
+
 ## Dispatcher CLI Usage
 
 Run a Codex task against the configured default repo:

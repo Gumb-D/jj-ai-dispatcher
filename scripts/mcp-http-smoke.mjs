@@ -198,12 +198,34 @@ function assertLatestResult(payload) {
     throw new Error("dispatcher_latest_result returned a token field");
   }
   if (typeof payload.taskId === "string" && payload.taskId.length > 0) {
+    assertRunStatusFields(payload, "dispatcher_latest_result");
     return "latest run present";
   }
   if (payload.status === "error" && payload.errorType === "bridge_error" && payload.bridgeStatus === 404) {
     return "no latest run available";
   }
   throw new Error("dispatcher_latest_result did not return a run or expected no-run state");
+}
+
+function assertRunStatusFields(payload, label) {
+  const executionStatuses = new Set(["queued", "running", "success", "failed", "cancelled"]);
+  const deliveryStatuses = new Set(["not_requested", "pending", "delivered", "timeout", "failed", "skipped", "unavailable"]);
+
+  if (!executionStatuses.has(payload.executionStatus)) {
+    throw new Error(`${label} returned invalid executionStatus ${String(payload.executionStatus)}`);
+  }
+  if (payload.status !== payload.executionStatus) {
+    throw new Error(`${label} status did not mirror executionStatus`);
+  }
+  if (!deliveryStatuses.has(payload.deliveryStatus)) {
+    throw new Error(`${label} returned invalid deliveryStatus ${String(payload.deliveryStatus)}`);
+  }
+  if (typeof payload.deliveryRequired !== "boolean") {
+    throw new Error(`${label} returned non-boolean deliveryRequired`);
+  }
+  if (!Object.prototype.hasOwnProperty.call(payload, "deliveryChannel")) {
+    throw new Error(`${label} omitted deliveryChannel`);
+  }
 }
 
 function assertDispatchGuard(result) {
@@ -270,6 +292,15 @@ async function main() {
       "dispatcher_latest_result"
     );
     pass("dispatcher_latest_result", assertLatestResult(latest));
+
+    if (typeof latest.taskId === "string" && latest.taskId.length > 0) {
+      const run = parseToolPayload(
+        await client.callTool({ name: "dispatcher_get_run", arguments: { taskId: latest.taskId } }),
+        "dispatcher_get_run"
+      );
+      assertRunStatusFields(run, "dispatcher_get_run");
+      pass("dispatcher_get_run", `taskId=${run.taskId}`);
+    }
 
     const dispatchGuard = await client.callTool({ name: "dispatcher_dispatch", arguments: {} });
     assertDispatchGuard(dispatchGuard);

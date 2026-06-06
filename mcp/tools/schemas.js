@@ -116,7 +116,11 @@ const logsSchema = z.object({
 });
 
 export const runOutputSchema = z.object({
-  status: z.string().describe("Run execution status (success, failed, or error)."),
+  status: z.string().describe("Backward-compatible run execution status. For run results this mirrors executionStatus."),
+  executionStatus: z.enum(["queued", "running", "success", "failed", "cancelled"]).optional().describe("Execution outcome independent of result delivery."),
+  deliveryStatus: z.enum(["not_requested", "pending", "delivered", "timeout", "failed", "skipped", "unavailable"]).optional().describe("Delivery outcome for optional result channels."),
+  deliveryChannel: z.string().nullable().optional().describe("Optional result delivery channel, such as browser_postback."),
+  deliveryRequired: z.boolean().optional().describe("Whether delivery through the channel was required for the task."),
   taskId: z.string().optional().describe("Task ID of this run."),
   repo: z.string().optional().describe("Target repository path."),
   worker: z.string().optional().describe("Assigned coding worker."),

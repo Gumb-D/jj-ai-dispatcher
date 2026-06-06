@@ -112,6 +112,8 @@ async function enrichRunResult(result, source) {
     throw new Error("latest run result is not an object");
   }
 
+  result = normalizeRunResult(result);
+
   const taskId = String(result.taskId || "");
   if (!TASK_ID_PATTERN.test(taskId)) {
     throw new Error("latest run result has an invalid taskId");
@@ -137,6 +139,10 @@ function printReviewChecklist({ source, result, summaryText }) {
   console.log(`Data source: ${source}`);
   console.log(`Task ID: ${valueOrNone(result.taskId)}`);
   console.log(`Status: ${valueOrNone(result.status)}`);
+  console.log(`Execution status: ${valueOrNone(result.executionStatus)}`);
+  console.log(`Delivery status: ${valueOrNone(result.deliveryStatus)}`);
+  console.log(`Delivery channel: ${valueOrNone(result.deliveryChannel)}`);
+  console.log(`Delivery required: ${valueOrNone(result.deliveryRequired)}`);
   console.log(`Repo: ${valueOrNone(result.repo)}`);
   console.log(`Worker: ${valueOrNone(result.worker)}`);
   console.log(`Commit: ${valueOrNone(result.commit)}`);
@@ -239,6 +245,29 @@ function suggestClassification(result) {
     return "needs_followup";
   }
   return "accepted";
+}
+
+const EXECUTION_STATUSES = new Set(["queued", "running", "success", "failed", "cancelled"]);
+const DELIVERY_STATUSES = new Set(["not_requested", "pending", "delivered", "timeout", "failed", "skipped", "unavailable"]);
+
+function normalizeRunResult(result) {
+  const executionStatus = EXECUTION_STATUSES.has(result.executionStatus)
+    ? result.executionStatus
+    : EXECUTION_STATUSES.has(result.status)
+      ? result.status
+      : "failed";
+  const deliveryStatus = DELIVERY_STATUSES.has(result.deliveryStatus)
+    ? result.deliveryStatus
+    : "not_requested";
+
+  return {
+    ...result,
+    status: executionStatus,
+    executionStatus,
+    deliveryStatus,
+    deliveryChannel: Object.prototype.hasOwnProperty.call(result, "deliveryChannel") ? result.deliveryChannel : null,
+    deliveryRequired: Object.prototype.hasOwnProperty.call(result, "deliveryRequired") ? Boolean(result.deliveryRequired) : false
+  };
 }
 
 function valueOrNone(value) {
