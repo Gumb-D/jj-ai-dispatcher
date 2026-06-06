@@ -18,6 +18,7 @@
     "mcp:http:smoke": "node scripts/mcp-http-smoke.mjs",
     "result-contract": "node scripts/validate-result-contract.mjs",
     "delivery-state": "pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/test-delivery-state.ps1",
+    "result-retrieval": "pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/test-result-retrieval.ps1",
     "review:latest": "node scripts/review-latest-run.mjs",
     "build": "node --check mcp/server/index.js && node --check mcp/server/http.js && node --check mcp/server/server.js && node --check mcp/server/bridgeClient.js && node --check mcp/server/errors.js && node --check mcp/config/loadConfig.js && node --check mcp/tools/index.js && node --check mcp/tools/schemas.js && node --check scripts/mcp-smoke.mjs && node --check scripts/mcp-http-smoke.mjs && node --check scripts/review-latest-run.mjs && node --check scripts/validate-result-contract.mjs"
   },

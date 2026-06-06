@@ -124,6 +124,10 @@ function assertRunShape(result, expected) {
   assert(result.executionStatus === expected.executionStatus, `${expected.label} executionStatus was ${result.executionStatus}`);
   assert(result.deliveryStatus === expected.deliveryStatus, `${expected.label} deliveryStatus was ${result.deliveryStatus}`);
   assert(result.deliveryRequired === expected.deliveryRequired, `${expected.label} deliveryRequired was ${result.deliveryRequired}`);
+  assert(result.artifacts?.result === `dispatcher/runs/${result.taskId}/result.json`, `${expected.label} result artifact path missing`);
+  assert(Array.isArray(result.validationSummary), `${expected.label} validationSummary missing`);
+  assert(Array.isArray(result.errors), `${expected.label} errors missing`);
+  assert(typeof result.recovery === "string" && result.recovery.length > 0, `${expected.label} recovery guidance missing`);
 }
 
 async function withServer(handler, callback) {

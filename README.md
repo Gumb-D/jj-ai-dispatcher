@@ -131,6 +131,10 @@ In run results, `status` is retained for compatibility and represents execution 
 
 Browser postback delivery is optional and may move through `pending`, `delivered`, `timeout`, `failed`, `skipped`, or `unavailable`. These delivery updates are persisted to `result.json` and reflected by `dispatcher_latest_result` and `dispatcher_get_run`, but they never change top-level `status` or `executionStatus`. A successful execution with a postback timeout remains `status: "success"` and `executionStatus: "success"` with `deliveryStatus: "timeout"`.
 
+`dispatcher_latest_result` returns the newest completed persisted run for this dispatcher repository. It ignores interrupted `queued` or `running` artifacts, malformed task/result mismatches, and completed lifecycle-test artifacts whose `repo` points at unrelated temporary repositories. Direct `dispatcher_get_run` lookup still uses the exact task ID and returns that run only.
+
+Bridge restart limitation: completed `result.json` files remain retrievable after restart because retrieval is based on `dispatcher/runs/<task-id>/`. In-memory browser postback queue state does not survive a bridge restart; after restart, use `dispatcher_latest_result` or `dispatcher_get_run` as the authoritative recovery path.
+
 ## Dispatcher CLI Usage
 
 Run a Codex task against the configured default repo:

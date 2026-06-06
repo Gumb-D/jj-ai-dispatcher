@@ -108,7 +108,7 @@ export function normalizeRunResult(result) {
     ? result.deliveryStatus
     : "not_requested";
 
-  return {
+  const normalized = {
     ...result,
     status: executionStatus,
     executionStatus,
@@ -116,4 +116,89 @@ export function normalizeRunResult(result) {
     deliveryChannel: Object.prototype.hasOwnProperty.call(result, "deliveryChannel") ? result.deliveryChannel : null,
     deliveryRequired: Object.prototype.hasOwnProperty.call(result, "deliveryRequired") ? Boolean(result.deliveryRequired) : false
   };
+
+  if (!Object.prototype.hasOwnProperty.call(normalized, "artifacts")) {
+    normalized.artifacts = buildArtifactPaths(normalized);
+  }
+  if (!Object.prototype.hasOwnProperty.call(normalized, "validationSummary")) {
+    normalized.validationSummary = buildValidationSummary(normalized);
+  }
+  if (!Object.prototype.hasOwnProperty.call(normalized, "errors")) {
+    normalized.errors = buildErrors(normalized);
+  }
+  if (!Object.prototype.hasOwnProperty.call(normalized, "recovery")) {
+    normalized.recovery = buildRecoveryMessage(normalized);
+  }
+
+  return normalized;
+}
+
+function buildArtifactPaths(result) {
+  const base = `dispatcher/runs/${result.taskId}`;
+  const artifacts = {
+    runDir: base,
+    task: `${base}/task.json`,
+    result: `${base}/result.json`,
+    summary: `${base}/summary.md`
+  };
+
+  if (result.logs && typeof result.logs === "object") {
+    if (typeof result.logs.stdout === "string" && result.logs.stdout.trim()) {
+      artifacts.stdout = result.logs.stdout;
+    }
+    if (typeof result.logs.stderr === "string" && result.logs.stderr.trim()) {
+      artifacts.stderr = result.logs.stderr;
+    }
+    if (typeof result.logs.diff === "string" && result.logs.diff.trim()) {
+      artifacts.diff = result.logs.diff;
+    }
+  }
+
+  return artifacts;
+}
+
+function buildValidationSummary(result) {
+  const items = [];
+  if (typeof result.workingTreeClean === "boolean") {
+    items.push(result.workingTreeClean ? "git status --short clean" : "git status --short not clean or unavailable");
+  }
+  items.push(`deliveryStatus=${result.deliveryStatus}`);
+  return items;
+}
+
+function buildErrors(result) {
+  const errors = [];
+  if (typeof result.error === "string" && result.error.trim()) {
+    errors.push(result.error.trim());
+  }
+  if (result.executionStatus !== "success" && Array.isArray(result.reviewHints)) {
+    for (const hint of result.reviewHints) {
+      if (typeof hint === "string" && hint.trim() && !errors.includes(hint.trim())) {
+        errors.push(hint.trim());
+      }
+    }
+  }
+  return errors;
+}
+
+function buildRecoveryMessage(result) {
+  if (result.deliveryStatus === "delivered") {
+    return "Browser postback delivered. Persistent result remains available through dispatcher_latest_result and dispatcher_get_run.";
+  }
+  if (result.deliveryStatus === "pending") {
+    return "Browser postback pending. If browser delivery does not complete, retrieve the persisted result through dispatcher_latest_result or dispatcher_get_run.";
+  }
+  if (result.deliveryStatus === "timeout") {
+    return "Browser postback timed out. Execution result remains authoritative through dispatcher_latest_result and dispatcher_get_run.";
+  }
+  if (result.deliveryStatus === "failed") {
+    return "Browser postback failed. Execution result remains authoritative through dispatcher_latest_result and dispatcher_get_run.";
+  }
+  if (result.deliveryStatus === "skipped") {
+    return "Browser postback skipped. Persistent result is available through dispatcher_latest_result and dispatcher_get_run.";
+  }
+  if (result.deliveryStatus === "unavailable") {
+    return "Browser postback unavailable. Persistent result is available through dispatcher_latest_result and dispatcher_get_run.";
+  }
+  return "Persistent result is available through dispatcher_latest_result and dispatcher_get_run.";
 }

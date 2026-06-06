@@ -475,7 +475,154 @@ function Normalize-RunResultContract {
         $Result | Add-Member -NotePropertyName "deliveryRequired" -NotePropertyValue $false
     }
 
+    if (-not $Result.PSObject.Properties.Name.Contains("artifacts")) {
+        $artifacts = [ordered]@{
+            runDir = "dispatcher/runs/$($Result.taskId)"
+            task = "dispatcher/runs/$($Result.taskId)/task.json"
+            result = "dispatcher/runs/$($Result.taskId)/result.json"
+            summary = "dispatcher/runs/$($Result.taskId)/summary.md"
+        }
+
+        if ($Result.PSObject.Properties.Name.Contains("logs") -and $null -ne $Result.logs) {
+            if ($Result.logs.PSObject.Properties.Name.Contains("stdout") -and -not [string]::IsNullOrWhiteSpace($Result.logs.stdout)) {
+                $artifacts.stdout = [string]$Result.logs.stdout
+            }
+            if ($Result.logs.PSObject.Properties.Name.Contains("stderr") -and -not [string]::IsNullOrWhiteSpace($Result.logs.stderr)) {
+                $artifacts.stderr = [string]$Result.logs.stderr
+            }
+            if ($Result.logs.PSObject.Properties.Name.Contains("diff") -and -not [string]::IsNullOrWhiteSpace($Result.logs.diff)) {
+                $artifacts.diff = [string]$Result.logs.diff
+            }
+        }
+
+        $Result | Add-Member -NotePropertyName "artifacts" -NotePropertyValue ([pscustomobject]$artifacts)
+    }
+
+    if (-not $Result.PSObject.Properties.Name.Contains("validationSummary")) {
+        $validationItems = @()
+        if ($Result.PSObject.Properties.Name.Contains("workingTreeClean")) {
+            $validationItems += if ([bool]$Result.workingTreeClean) { "git status --short clean" } else { "git status --short not clean or unavailable" }
+        }
+        if ($Result.PSObject.Properties.Name.Contains("deliveryStatus")) {
+            $validationItems += "deliveryStatus=$($Result.deliveryStatus)"
+        }
+        $Result | Add-Member -NotePropertyName "validationSummary" -NotePropertyValue $validationItems
+    }
+
+    if (-not $Result.PSObject.Properties.Name.Contains("errors")) {
+        $errors = @()
+        if ($Result.PSObject.Properties.Name.Contains("error") -and -not [string]::IsNullOrWhiteSpace($Result.error)) {
+            $errors += [string]$Result.error
+        }
+        if ($Result.PSObject.Properties.Name.Contains("reviewHints") -and $null -ne $Result.reviewHints -and $Result.executionStatus -ne "success") {
+            $errors += @($Result.reviewHints | Where-Object { -not [string]::IsNullOrWhiteSpace([string]$_) } | ForEach-Object { [string]$_ })
+        }
+        $Result | Add-Member -NotePropertyName "errors" -NotePropertyValue @($errors | Select-Object -Unique)
+    }
+
+    if (-not $Result.PSObject.Properties.Name.Contains("recovery")) {
+        $detail = if ($Result.PSObject.Properties.Name.Contains("deliveryDetail")) { [string]$Result.deliveryDetail } else { "" }
+        $Result | Add-Member -NotePropertyName "recovery" -NotePropertyValue (Get-DeliveryRecoveryMessage -DeliveryStatus $deliveryStatus -Detail $detail)
+    }
+
     return $Result
+}
+
+function ConvertTo-ComparablePath {
+    param([string]$PathValue)
+
+    if ([string]::IsNullOrWhiteSpace($PathValue)) {
+        return ""
+    }
+
+    if ($PathValue -eq "self") {
+        return [System.IO.Path]::GetFullPath($projectRoot).TrimEnd("\", "/")
+    }
+
+    try {
+        return [System.IO.Path]::GetFullPath($PathValue).TrimEnd("\", "/")
+    }
+    catch {
+        return $PathValue.TrimEnd("\", "/")
+    }
+}
+
+function Test-RunResultBelongsToProject {
+    param([object]$Result)
+
+    if ($null -eq $Result) {
+        return $false
+    }
+
+    $repoValue = ""
+    if ($Result.PSObject.Properties.Name.Contains("resolvedRepo") -and -not [string]::IsNullOrWhiteSpace($Result.resolvedRepo)) {
+        $repoValue = [string]$Result.resolvedRepo
+    }
+    elseif ($Result.PSObject.Properties.Name.Contains("repo")) {
+        $repoValue = [string]$Result.repo
+    }
+
+    if ([string]::IsNullOrWhiteSpace($repoValue)) {
+        return $true
+    }
+
+    $expected = ConvertTo-ComparablePath -PathValue $projectRoot
+    $actual = ConvertTo-ComparablePath -PathValue $repoValue
+    return [string]::Equals($actual, $expected, [System.StringComparison]::OrdinalIgnoreCase)
+}
+
+function Test-RunResultCompleted {
+    param([object]$Result)
+
+    if ($null -eq $Result) {
+        return $false
+    }
+
+    $normalized = Normalize-RunResultContract -Result $Result
+    return ([string]$normalized.executionStatus) -in @("success", "failed", "cancelled")
+}
+
+function Read-RunResultFile {
+    param([string]$ResultPath)
+
+    try {
+        return Get-Content -LiteralPath $ResultPath -Raw | ConvertFrom-Json
+    }
+    catch {
+        return $null
+    }
+}
+
+function Get-RunResultContract {
+    param([string]$TaskId)
+
+    if (-not (Test-TaskId -TaskId $TaskId)) {
+        throw "invalid_task_id:Malformed taskId."
+    }
+
+    try {
+        $resultPath = Get-RunResultPath -TaskId $TaskId
+    }
+    catch {
+        throw "invalid_task_id:Malformed taskId."
+    }
+
+    if (-not (Test-Path -LiteralPath $resultPath -PathType Leaf)) {
+        throw "not_found:Run result not found."
+    }
+
+    try {
+        $result = Get-Content -LiteralPath $resultPath -Raw | ConvertFrom-Json
+    }
+    catch {
+        throw "invalid_result_json:Run result JSON could not be parsed."
+    }
+
+    if ($result.PSObject.Properties.Name.Contains("taskId") -and [string]$result.taskId -ne $TaskId) {
+        throw "invalid_result_contract:Run result taskId does not match requested taskId."
+    }
+
+    return Normalize-RunResultContract -Result $result
 }
 
 function Update-RunDeliveryStatus {
@@ -553,36 +700,26 @@ function Read-RunResult {
     }
 
     try {
-        $resultPath = Get-RunResultPath -TaskId $TaskId
+        $result = Get-RunResultContract -TaskId $TaskId
     }
     catch {
-        Write-JsonResponse -Response $Response -StatusCode 400 -Body ([ordered]@{
-            status = "invalid_task_id"
-            error = "Malformed taskId."
+        $message = $_.Exception.Message
+        $parts = $message -split ":", 2
+        $status = if ($parts.Count -eq 2) { $parts[0] } else { "invalid_result_json" }
+        $error = if ($parts.Count -eq 2) { $parts[1] } else { "Run result JSON could not be parsed." }
+        $statusCode = switch ($status) {
+            "invalid_task_id" { 400 }
+            "not_found" { 404 }
+            default { 500 }
+        }
+        Write-JsonResponse -Response $Response -StatusCode $statusCode -Body ([ordered]@{
+            status = $status
+            error = $error
         })
         return
     }
 
-    if (-not (Test-Path -LiteralPath $resultPath -PathType Leaf)) {
-        Write-JsonResponse -Response $Response -StatusCode 404 -Body ([ordered]@{
-            status = "not_found"
-            error = "Run result not found."
-        })
-        return
-    }
-
-    try {
-        $result = Get-Content -LiteralPath $resultPath -Raw | ConvertFrom-Json
-    }
-    catch {
-        Write-JsonResponse -Response $Response -StatusCode 500 -Body ([ordered]@{
-            status = "invalid_result_json"
-            error = "Run result JSON could not be parsed."
-        })
-        return
-    }
-
-    Write-JsonResponse -Response $Response -StatusCode 200 -Body (Normalize-RunResultContract -Result $result)
+    Write-JsonResponse -Response $Response -StatusCode 200 -Body $result
 }
 
 function Get-LatestRunTaskId {
@@ -592,8 +729,28 @@ function Get-LatestRunTaskId {
     }
 
     $latest = Get-ChildItem -LiteralPath $runsRoot -Directory |
-        Where-Object { (Test-TaskId -TaskId $_.Name) -and (Test-Path -LiteralPath (Join-Path $_.FullName "result.json") -PathType Leaf) } |
         Sort-Object Name -Descending |
+        Where-Object {
+            if (-not (Test-TaskId -TaskId $_.Name)) {
+                return $false
+            }
+
+            $resultPath = Join-Path $_.FullName "result.json"
+            if (-not (Test-Path -LiteralPath $resultPath -PathType Leaf)) {
+                return $false
+            }
+
+            $result = Read-RunResultFile -ResultPath $resultPath
+            if ($null -eq $result) {
+                return $false
+            }
+
+            if ($result.PSObject.Properties.Name.Contains("taskId") -and [string]$result.taskId -ne $_.Name) {
+                return $false
+            }
+
+            return (Test-RunResultCompleted -Result $result) -and (Test-RunResultBelongsToProject -Result $result)
+        } |
         Select-Object -First 1
 
     if ($null -eq $latest) {

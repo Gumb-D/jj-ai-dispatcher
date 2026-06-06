@@ -239,11 +239,13 @@ Invoke-RestMethod `
   -Headers @{ "X-Dispatcher-Token" = $token }
 ```
 
-The response is the latest `result.json`. It includes fields such as `taskId`, `status`, `executionStatus`, `deliveryStatus`, `deliveryChannel`, `deliveryRequired`, `repo`, `worker`, `filesChanged`, `commit`, `workingTreeClean`, `summary`, `logs`, `needsReview`, and `reviewHints`. `status` is retained for backward compatibility and represents execution outcome only.
+The response is the latest completed `result.json` for this dispatcher repository. It includes fields such as `taskId`, `status`, `executionStatus`, `deliveryStatus`, `deliveryChannel`, `deliveryRequired`, `repo`, `worker`, `filesChanged`, `commit`, `pushed`, `workingTreeClean`, `validationSummary`, `summary`, `logs`, `artifacts`, `errors`, `needsReview`, `reviewHints`, and `recovery`. `status` is retained for backward compatibility and represents execution outcome only.
 
 Delivery updates from browser postback are persisted into the same result artifact. A successful execution with `deliveryStatus = "timeout"` remains `status = "success"` and `executionStatus = "success"`.
 
 `/runs/latest` may return `not_found` while a task is still running. This is expected when the worker has not written `result.json` yet. Poll `GET /status` until `taskState = "idle"`, then retry `GET /runs/latest`.
+
+`/runs/latest` ignores interrupted `queued` or `running` artifacts, malformed task/result mismatches, and completed lifecycle-test artifacts whose `repo` points at unrelated temporary repositories. Direct `/runs/{taskId}` lookup still returns only the exact requested task ID and rejects a malformed result whose embedded `taskId` does not match its run folder.
 
 ### GET /runs/{taskId}
 
@@ -301,6 +303,8 @@ Recovery path after browser postback timeout, browser suspension, Windows unlock
 3. If a task ID is known, call `dispatcher_get_run`, or `GET /runs/{taskId}`.
 4. Review Execution, Delivery, and Recovery separately: `status` and `executionStatus` for execution truth, `deliveryStatus` and `deliveryChannel` for optional postback delivery, and persistent retrieval through `GET /runs/latest` or `GET /runs/{taskId}` for recovery.
 5. Dispatch another task only after reviewing the persisted result.
+
+Bridge restart behavior: completed `result.json` files remain retrievable after restart because result retrieval reloads from `dispatcher/runs/<task-id>/`. The current bridge does not persist in-memory postback queue or active typing state across restart. If the bridge restarts during browser postback delivery, recover from the persisted run result rather than waiting for the old postback queue.
 
 ## Historical Local Smoke Test Results
 

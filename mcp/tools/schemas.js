@@ -115,6 +115,16 @@ const logsSchema = z.object({
   diff: z.string().optional().describe("Relative path to git diff patch.")
 });
 
+const artifactsSchema = z.object({
+  runDir: z.string().optional().describe("Relative run artifact directory."),
+  task: z.string().optional().describe("Relative task artifact path."),
+  result: z.string().optional().describe("Relative result artifact path."),
+  summary: z.string().optional().describe("Relative summary artifact path."),
+  stdout: z.string().optional().describe("Relative stdout log artifact path."),
+  stderr: z.string().optional().describe("Relative stderr log artifact path."),
+  diff: z.string().optional().describe("Relative git diff artifact path.")
+}).passthrough();
+
 export const runOutputSchema = z.object({
   status: z.string().describe("Backward-compatible run execution status. For run results this mirrors executionStatus."),
   executionStatus: z.enum(["queued", "running", "success", "failed", "cancelled"]).optional().describe("Execution outcome independent of result delivery."),
@@ -129,9 +139,13 @@ export const runOutputSchema = z.object({
   commitMessage: z.string().optional().describe("Staged git commit message."),
   pushed: z.boolean().optional().describe("Whether changes were pushed to origin."),
   workingTreeClean: z.boolean().optional().describe("Whether the git working tree is clean."),
+  validationSummary: z.array(z.string()).optional().describe("Focused validation summary captured or derived from the run result."),
   summary: z.string().optional().describe("Human readable summary of the task run."),
   logs: logsSchema.optional().describe("Log references for this run."),
+  artifacts: artifactsSchema.optional().describe("Run artifact paths available for retrieval or manual review."),
   error: z.string().optional().describe("Error details if the task failed."),
+  errors: z.array(z.string()).optional().describe("Safe error and review guidance messages captured for failed runs."),
+  recovery: z.string().optional().describe("Recovery guidance for retrieving persisted results after delivery or client interruption."),
   needsReview: z.boolean().optional().describe("Whether this run needs manual code review."),
   reviewHints: z.array(z.string()).optional().describe("Specific review hints or guidelines for the user."),
   errorType: z.string().optional().describe("Type classification of this error."),

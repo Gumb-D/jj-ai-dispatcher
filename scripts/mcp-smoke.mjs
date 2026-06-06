@@ -113,6 +113,18 @@ function assertRunStatusFields(payload, label) {
   if (!Object.prototype.hasOwnProperty.call(payload, "deliveryChannel")) {
     throw new Error(`${label} omitted deliveryChannel`);
   }
+  if (!payload.artifacts || typeof payload.artifacts !== "object" || typeof payload.artifacts.result !== "string") {
+    throw new Error(`${label} omitted artifact paths`);
+  }
+  if (!Array.isArray(payload.validationSummary)) {
+    throw new Error(`${label} omitted validationSummary`);
+  }
+  if (!Array.isArray(payload.errors)) {
+    throw new Error(`${label} omitted errors`);
+  }
+  if (typeof payload.recovery !== "string" || payload.recovery.length === 0) {
+    throw new Error(`${label} omitted recovery guidance`);
+  }
 }
 
 async function main() {
