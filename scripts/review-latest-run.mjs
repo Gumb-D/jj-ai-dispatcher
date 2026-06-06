@@ -169,6 +169,14 @@ function printReviewChecklist({ source, result, summaryText }) {
   console.log("- [ ] Task objective satisfied.");
   console.log("- [ ] Result contract and summary are consistent.");
   console.log("");
+  console.log("### Execution");
+  console.log("- [ ] `status` and `executionStatus` reviewed as execution outcome.");
+  console.log("- [ ] Execution logs, errors, and validation output reviewed before any follow-up dispatch.");
+  console.log("");
+  console.log("### Delivery");
+  console.log("- [ ] `deliveryStatus` and `deliveryChannel` reviewed separately from execution outcome.");
+  console.log("- [ ] Browser postback treated as optional delivery, not the only recovery path.");
+  console.log("");
   console.log("### Scope");
   console.log("- [ ] Approved scope respected.");
   console.log("- [ ] Forbidden areas untouched.");

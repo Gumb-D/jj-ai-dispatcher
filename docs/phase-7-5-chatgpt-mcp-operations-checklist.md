@@ -107,13 +107,25 @@ Expected:
 | MCP adapter down | Start Terminal 2 with `npm run mcp:http`, then rerun the connector/tool-list check. |
 | ngrok down | Start Terminal 3 again and update the ChatGPT connector URL to the new `https://<ngrok-domain>/mcp`. |
 | ngrok command not found | Confirm ngrok is installed, reopen the terminal, then run `ngrok version`. |
-| ngrok auth token missing | Run `ngrok config add-authtoken <TOKEN>` and do not paste the token into repo files, docs, commits, or chat logs. |
+| ngrok auth token missing | Run `ngrok config add-authtoken <TOKEN>` with an operator-held token and do not paste the token into repo files, docs, commits, or chat logs. |
 | Qi-AnXin Tianqing quarantined ngrok | Restore or reinstall ngrok only under operator/company policy; if approved, allow the WinGet temp/package locations documented in the Phase 7.4 runbook. |
 | Forbidden / 403 / host mismatch | Restart ngrok with `ngrok http 8790 --host-header="localhost:8790"`. |
 | ChatGPT connector tool list missing | Confirm the MCP Server URL ends with `/mcp`, ngrok forwards to `localhost:8790`, the MCP HTTP adapter is running, and the tool list is exactly the approved four. |
-| Latest result still running | Call `dispatcher_status`, wait until the run completes, then call `dispatcher_latest_result` again. Do not dispatch another task until the latest run is reviewed. |
-| Browser postback timeout | Treat this as delivery failure only. Call `dispatcher_latest_result`, then `dispatcher_get_run` if a specific task ID is needed. |
-| Windows was locked during execution | Execution may have continued if the local worker stayed operational. Browser DOM typing/send is not lock-screen tolerant, so retrieve the persisted result after unlock. |
+| Latest result not found while task is active | Call `dispatcher_status`, wait until the run completes, then call `dispatcher_latest_result` again. Do not dispatch another task until the completed result is reviewed. |
+| Browser postback timeout | Treat this as optional delivery failure only. Call `dispatcher_status`, then `dispatcher_latest_result`, then `dispatcher_get_run` if a specific task ID is needed. |
+| Browser extension reload or ChatGPT page refresh | Reopen the connector context, call `dispatcher_status`, then retrieve the persisted result with `dispatcher_latest_result` or `dispatcher_get_run`. Browser postback is not the recovery source of truth. |
+| MCP reconnect after temporary disconnect | Call `dispatcher_status` first. If idle, retrieve the persisted result. If running, wait and check status again. |
+| Windows was locked during execution | Execution may have continued if the local worker stayed operational. Browser DOM typing/send is not lock-screen tolerant, so after unlock call `dispatcher_status`, then retrieve and review the persisted result. |
+| Bridge restarted | Completed `result.json` files remain retrievable from `dispatcher/runs/<task-id>/`. In-memory task state and postback queue state do not survive restart; recover only completed persisted results through `dispatcher_latest_result` or `dispatcher_get_run`. |
+
+## Result Review Checklist
+
+- [ ] `dispatcher_status` confirms the bridge is reachable before result retrieval.
+- [ ] `dispatcher_latest_result` was used for the newest completed persisted result.
+- [ ] `dispatcher_get_run` was used when a known task ID needed exact review.
+- [ ] `executionStatus` was reviewed separately from `deliveryStatus`.
+- [ ] Browser postback was treated as optional delivery, not the only recovery path.
+- [ ] No new task was dispatched before reviewing the persisted result.
 
 ## Shutdown Checklist
 
@@ -138,6 +150,7 @@ Stop in this order with `Ctrl+C`:
 - [ ] No Auth is only for controlled feasibility testing.
 - [ ] Browser postback is optional delivery.
 - [ ] Persistent MCP retrieval is the recovery path.
+- [ ] Dispatcher Bridge `8787` remains local-only and MCP Adapter `8790` is the only approved adapter endpoint for controlled exposure.
 
 ## Known-Good Snapshot
 

@@ -186,11 +186,31 @@ Each helper reads bridge host, port, and token from local dispatcher configurati
 Use persistent result retrieval as the recovery path whenever browser postback is unavailable:
 
 ```text
+dispatcher_status
 dispatcher_latest_result
 dispatcher_get_run
 ```
 
-Execution can continue while Windows is locked if the local worker remains operational. Browser DOM typing and send-button interaction are not lock-screen tolerant. After unlocking, confirm MCP connectivity with `dispatcher_status`, then retrieve the persisted result with `dispatcher_latest_result` or `dispatcher_get_run`.
+Tool roles:
+
+- `dispatcher_status` confirms MCP-to-adapter-to-bridge connectivity and reports whether a task is still active.
+- `dispatcher_latest_result` retrieves the newest completed persisted run result after execution is idle or when browser postback was interrupted.
+- `dispatcher_get_run` retrieves one persisted run by task ID when the operator needs a specific run rather than whatever is latest.
+
+Execution can continue while Windows is locked if the local worker remains operational. Browser DOM typing and send-button interaction are not lock-screen tolerant. Browser postback is optional and must never be treated as the only recovery path.
+
+Use this workflow after Windows unlock, browser timeout, extension reload, ChatGPT page refresh, MCP reconnect, or a temporary connector interruption:
+
+1. Reconnect the client or reopen the ChatGPT page if needed.
+2. Call `dispatcher_status` to confirm the adapter and bridge are reachable.
+3. If `taskState` is `running`, wait and call `dispatcher_status` again.
+4. When the task is no longer running, call `dispatcher_latest_result`.
+5. If a known task ID must be reviewed, call `dispatcher_get_run` with that exact ID.
+6. Review `executionStatus` as execution truth.
+7. Review `deliveryStatus` separately as optional browser-postback delivery.
+8. Continue, accept, or dispatch follow-up work only after reviewing the persisted result.
+
+Bridge restart boundary: completed `dispatcher/runs/<task-id>/result.json` files remain recoverable after restart. In-memory task state, pending postback queue entries, and active browser typing state are not persisted across a bridge restart. After restart, confirm `dispatcher_status`, then recover only completed persisted results through `dispatcher_latest_result` or `dispatcher_get_run`.
 
 ## Safety Boundaries
 
@@ -209,4 +229,4 @@ Execution can continue while Windows is locked if the local worker remains opera
 2. Send the ChatGPT-prepared task with `.\scripts\bridge-dispatch.ps1`.
 3. Wait for completion with `.\scripts\bridge-wait-latest.ps1`.
 4. Paste the final JSON result back to ChatGPT.
-5. Let ChatGPT review `status`, `filesChanged`, `commit`, `workingTreeClean`, `summary`, and `reviewHints`.
+5. Let ChatGPT review `status`, `executionStatus`, `deliveryStatus`, `filesChanged`, `commit`, `workingTreeClean`, `summary`, and `reviewHints`.

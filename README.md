@@ -112,14 +112,21 @@ Browser postback is an optional delivery channel. It is useful when the browser 
 
 Execution can continue while Windows is locked when the local worker, Dispatcher, and target repository remain operational. Browser DOM typing and send-button interaction are not lock-screen tolerant, so a browser postback timeout does not prove that task execution failed.
 
+MCP recovery tool roles:
+
+- `dispatcher_status`: confirm the adapter and bridge are reachable and whether a task is still `running` or back to `idle`.
+- `dispatcher_latest_result`: retrieve the newest completed persisted result after the task is idle or when browser postback did not arrive.
+- `dispatcher_get_run`: retrieve a specific persisted result by task ID when the latest run is not the run being reviewed or the task ID is known from a previous result.
+
 Recovery path:
 
 1. Dispatch one approved task.
 2. Let Dispatcher and Codex execute locally.
-3. If browser postback succeeds, review the posted summary.
-4. If browser postback times out or the browser is unavailable, call `dispatcher_latest_result`.
-5. If a specific task ID is known, call `dispatcher_get_run`.
-6. Review the persisted result, commit, changed files, validation output, and working-tree state before dispatching another task.
+3. If the screen locks, the browser times out, the extension reloads, the ChatGPT page refreshes, or MCP reconnects, do not infer execution failure from the missing browser postback.
+4. After unlock or reconnect, call `dispatcher_status` first. If `taskState` is still `running`, wait and check again.
+5. When the bridge is reachable and the task is no longer running, call `dispatcher_latest_result`.
+6. If a specific task ID is known or latest result is not the intended run, call `dispatcher_get_run`.
+7. Review `executionStatus` separately from `deliveryStatus`, then review commit, changed files, validation output, and working-tree state before dispatching another task.
 
 The persisted result path is:
 
@@ -133,7 +140,7 @@ Browser postback delivery is optional and may move through `pending`, `delivered
 
 `dispatcher_latest_result` returns the newest completed persisted run for this dispatcher repository. It ignores interrupted `queued` or `running` artifacts, malformed task/result mismatches, and completed lifecycle-test artifacts whose `repo` points at unrelated temporary repositories. Direct `dispatcher_get_run` lookup still uses the exact task ID and returns that run only.
 
-Bridge restart limitation: completed `result.json` files remain retrievable after restart because retrieval is based on `dispatcher/runs/<task-id>/`. In-memory browser postback queue state does not survive a bridge restart; after restart, use `dispatcher_latest_result` or `dispatcher_get_run` as the authoritative recovery path.
+Bridge restart limitation: completed `result.json` files remain retrievable after restart because retrieval is based on `dispatcher/runs/<task-id>/`. In-memory task state, browser postback queue state, and active typing state do not survive a bridge restart. After restart, use `dispatcher_status` to confirm the bridge is back, then use `dispatcher_latest_result` or `dispatcher_get_run` as the authoritative recovery path for completed persisted runs.
 
 ## Dispatcher CLI Usage
 

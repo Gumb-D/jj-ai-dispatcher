@@ -296,15 +296,23 @@ Browser postback is optional delivery. It is not required for execution completi
 
 Execution can continue while Windows is locked when the local worker remains operational. Browser DOM typing and send-button interaction are not lock-screen tolerant, so a browser postback timeout should be treated as a delivery problem. It does not prove that Codex execution, Dispatcher Git handling, or result persistence failed.
 
-Recovery path after browser postback timeout, browser suspension, Windows unlock, or MCP reconnect:
+Recovery tool roles:
 
-1. Confirm the bridge and adapter are running.
-2. Call `dispatcher_latest_result` from MCP, or `GET /runs/latest` from the local bridge.
-3. If a task ID is known, call `dispatcher_get_run`, or `GET /runs/{taskId}`.
-4. Review Execution, Delivery, and Recovery separately: `status` and `executionStatus` for execution truth, `deliveryStatus` and `deliveryChannel` for optional postback delivery, and persistent retrieval through `GET /runs/latest` or `GET /runs/{taskId}` for recovery.
-5. Dispatch another task only after reviewing the persisted result.
+- `dispatcher_status` / `GET /status`: confirm the bridge is reachable and whether the task is still running.
+- `dispatcher_latest_result` / `GET /runs/latest`: retrieve the newest completed persisted result when the task is idle.
+- `dispatcher_get_run` / `GET /runs/{taskId}`: retrieve one known run by exact task ID.
 
-Bridge restart behavior: completed `result.json` files remain retrievable after restart because result retrieval reloads from `dispatcher/runs/<task-id>/`. The current bridge does not persist in-memory postback queue or active typing state across restart. If the bridge restarts during browser postback delivery, recover from the persisted run result rather than waiting for the old postback queue.
+Recovery path after browser postback timeout, browser suspension, extension reload, ChatGPT page refresh, Windows unlock, MCP reconnect, or connector interruption:
+
+1. Reopen or reconnect the client if needed.
+2. Confirm the bridge and adapter are running with `dispatcher_status` or `GET /status`.
+3. If `taskState` is `running`, wait and check status again. Do not dispatch a second task.
+4. When the task is no longer running, call `dispatcher_latest_result` or `GET /runs/latest`.
+5. If the intended task ID is known, or the newest completed result is not the intended run, call `dispatcher_get_run` or `GET /runs/{taskId}`.
+6. Review Execution, Delivery, and Recovery separately: `status` and `executionStatus` for execution truth, `deliveryStatus` and `deliveryChannel` for optional postback delivery, and persistent retrieval through `GET /runs/latest` or `GET /runs/{taskId}` for recovery.
+7. Dispatch another task only after reviewing the persisted result.
+
+Bridge restart behavior: completed `result.json` files remain retrievable after restart because result retrieval reloads from `dispatcher/runs/<task-id>/`. The current bridge does not persist in-memory task state, postback queue state, or active typing state across restart. If the bridge restarts during execution, first determine whether a completed `result.json` exists. If the bridge restarts during browser postback delivery, recover from the persisted run result rather than waiting for the old postback queue.
 
 ## Historical Local Smoke Test Results
 
