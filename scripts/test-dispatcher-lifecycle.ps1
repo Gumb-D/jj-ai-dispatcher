@@ -90,6 +90,10 @@ switch ($mode) {
         Start-Sleep -Seconds 60
         exit 0
     }
+    "noop" {
+        Write-Output "no repository changes"
+        exit 0
+    }
     default {
         Write-Error "unknown mode $mode" -ErrorAction Continue
         exit 9
@@ -100,26 +104,54 @@ switch ($mode) {
 }
 
 function Write-FakeGit {
-    $fakeGit = Join-Path $tempRoot "fake-git.cmd"
-    @'
+    param(
+        [switch]$FailCommit,
+        [switch]$TrackPush
+    )
+
+    $fakeGitName = if ($FailCommit) { "fake-git-fail-commit.cmd" } elseif ($TrackPush) { "fake-git-track-push.cmd" } else { "fake-git.cmd" }
+    $fakeGit = Join-Path $tempRoot $fakeGitName
+    $pushMarker = (Join-Path $tempRoot "fake-git-push.marker").Replace("\", "\\")
+    $content = if ($FailCommit) {
+@'
 @echo off
-if "%1"=="status" (
+if /i "%~1"=="status" (
   echo  M worker-success.txt
   exit /b 0
 )
-if "%1"=="add" (
-  echo forced git add failure 1>&2
-  exit /b 42
-)
-if "%1"=="diff" (
+if /i "%~1"=="add" (
   exit /b 0
 )
-if "%1"=="commit" (
+if /i "%~1"=="diff" (
+  echo fake diff
+  exit /b 0
+)
+if /i "%~1"=="commit" (
   echo forced git commit failure 1>&2
   exit /b 43
 )
 git %*
-'@ | Set-Content -LiteralPath $fakeGit -Encoding ASCII
+'@
+    }
+    elseif ($TrackPush) {
+@"
+@echo off
+if /i "%~1"=="push" (
+  echo pushed > "$pushMarker"
+  echo fake push
+  exit /b 0
+)
+git %*
+"@
+    }
+    else {
+@'
+@echo off
+git %*
+'@
+    }
+
+    $content | Set-Content -LiteralPath $fakeGit -Encoding ASCII
     return $fakeGit
 }
 
@@ -134,14 +166,21 @@ function Invoke-LifecycleCase {
         [string]$Name,
         [string]$Mode,
         [string]$WorkerPath,
-        [string]$GitExe = ""
+        [string]$GitExe = "",
+        [string]$PushControl = "",
+        [switch]$AllowAutoPush
     )
 
     $repo = New-TestRepo -Name $Name
     Set-Content -LiteralPath (Join-Path $inboxRoot "codex-task.txt") -Value "Lifecycle test $Name" -Encoding UTF8
     Set-Content -LiteralPath (Join-Path $inboxRoot "codex-task.repo.txt") -Value $repo -Encoding UTF8
     Set-Content -LiteralPath (Join-Path $inboxRoot "codex-task.commit.txt") -Value "test: lifecycle $Name" -Encoding UTF8
-    Remove-Item -LiteralPath (Join-Path $inboxRoot "codex-task.push.txt") -ErrorAction SilentlyContinue
+    if ([string]::IsNullOrWhiteSpace($PushControl)) {
+        Remove-Item -LiteralPath (Join-Path $inboxRoot "codex-task.push.txt") -ErrorAction SilentlyContinue
+    }
+    else {
+        Set-Content -LiteralPath (Join-Path $inboxRoot "codex-task.push.txt") -Value $PushControl -Encoding UTF8
+    }
 
     $env:JJ_DISPATCHER_TEST_WORKER_COMMAND = $WorkerPath
     $env:JJ_DISPATCHER_TEST_WORKER_MODE = $Mode
@@ -153,6 +192,11 @@ function Invoke-LifecycleCase {
     else {
         $env:JJ_DISPATCHER_TEST_GIT_EXE = $GitExe
     }
+
+    $configPath = Join-Path $dispatcherRoot "config.json"
+    $config = Get-Content -LiteralPath $configPath -Raw | ConvertFrom-Json
+    $config.safety.allowAutoPush = [bool]$AllowAutoPush
+    Set-Content -LiteralPath $configPath -Value ($config | ConvertTo-Json -Depth 10) -Encoding UTF8 -NoNewline
 
     & pwsh -NoProfile -ExecutionPolicy Bypass -File $runScript codex_task | Out-Host
     $exitCode = $LASTEXITCODE
@@ -185,7 +229,13 @@ function Invoke-LifecycleCase {
         deliveryStatus = $result.deliveryStatus
         summary = $result.summary
         needsReview = $result.needsReview
+        commit = $result.commit
+        pushed = $result.pushed
+        filesChanged = @($result.filesChanged)
+        workingTreeClean = $result.workingTreeClean
+        reviewHints = @($result.reviewHints)
         runDir = $run.FullName
+        repo = $repo
     }
 }
 
@@ -198,13 +248,43 @@ Backup-Inbox
 
 try {
     $worker = Write-TestWorker
-    $fakeGit = Write-FakeGit
+    $commitFailureGit = Write-FakeGit -FailCommit
+    $pushTrackingGit = Write-FakeGit -TrackPush
+    $pushMarker = Join-Path $tempRoot "fake-git-push.marker"
     $results = @()
-    $results += Invoke-LifecycleCase -Name "success" -Mode "success" -WorkerPath $worker
+    $success = Invoke-LifecycleCase -Name "success" -Mode "success" -WorkerPath $worker
+    $results += $success
+    if ([string]::IsNullOrWhiteSpace($success.commit)) { throw "success did not record dispatcher-owned commit." }
+    if ($success.pushed -ne $false) { throw "success pushed without explicit push control." }
+    if ($success.workingTreeClean -ne $true) { throw "success workingTreeClean expected true." }
+    if (-not ($success.filesChanged -contains "worker-success.txt")) { throw "success did not record worker-success.txt in filesChanged." }
+
+    $noChange = Invoke-LifecycleCase -Name "no-change" -Mode "noop" -WorkerPath $worker
+    $results += $noChange
+    if ($noChange.status -ne "success") { throw "no-change status expected success but was $($noChange.status)." }
+    if ($noChange.commit) { throw "no-change unexpectedly recorded a commit." }
+    if ($noChange.workingTreeClean -ne $true) { throw "no-change workingTreeClean expected true." }
+
     $results += Invoke-LifecycleCase -Name "failure" -Mode "failure" -WorkerPath $worker
     $results += Invoke-LifecycleCase -Name "timeout" -Mode "hang" -WorkerPath $worker
     $results += Invoke-LifecycleCase -Name "child-timeout" -Mode "child-hang" -WorkerPath $worker
-    $results += Invoke-LifecycleCase -Name "git-failure" -Mode "success" -WorkerPath $worker -GitExe $fakeGit
+    $gitFailure = Invoke-LifecycleCase -Name "git-failure" -Mode "success" -WorkerPath $worker -GitExe $commitFailureGit
+    $results += $gitFailure
+    if ($gitFailure.status -ne "failed") { throw "git-failure status expected failed but was $($gitFailure.status)." }
+    if (-not ($gitFailure.reviewHints -contains "Git commit failed.")) { throw "git-failure did not report Git commit failed." }
+
+    $pushDisabled = Invoke-LifecycleCase -Name "push-disabled" -Mode "success" -WorkerPath $worker -PushControl "true"
+    $results += $pushDisabled
+    if ($pushDisabled.status -ne "failed") { throw "push-disabled status expected failed but was $($pushDisabled.status)." }
+    if ($pushDisabled.pushed -ne $false) { throw "push-disabled unexpectedly recorded pushed=true." }
+    if (-not ($pushDisabled.reviewHints -contains "Auto push disabled by config.")) { throw "push-disabled did not report disabled auto push." }
+
+    Remove-Item -LiteralPath $pushMarker -ErrorAction SilentlyContinue
+    $pushAllowed = Invoke-LifecycleCase -Name "push-allowed" -Mode "success" -WorkerPath $worker -GitExe $pushTrackingGit -PushControl "true" -AllowAutoPush
+    $results += $pushAllowed
+    if ($pushAllowed.status -ne "success") { throw "push-allowed status expected success but was $($pushAllowed.status)." }
+    if ($pushAllowed.pushed -ne $true) { throw "push-allowed did not record pushed=true." }
+    if (-not (Test-Path -LiteralPath $pushMarker -PathType Leaf)) { throw "push-allowed did not exercise fake git push." }
 
     $results | Format-Table -AutoSize
 }
