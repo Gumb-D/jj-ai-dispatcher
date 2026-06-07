@@ -56,9 +56,13 @@ Current standing:
 - browser-visible postback exists as an optional delivery path
 - launcher startup and health-check workflow exists as an environment startup helper
 
-Current stabilization focus is the approved P0-P3 plan in [docs/JJ_AI_DISPATCHER_P0_P3_STABILIZATION_PLAN.md](docs/JJ_AI_DISPATCHER_P0_P3_STABILIZATION_PLAN.md). P0.1 is documentation consolidation only; version and runtime metadata alignment are reserved for P0.2.
+P0-P3 stabilization is complete. The controlling historical implementation plan is preserved in [docs/JJ_AI_DISPATCHER_P0_P3_STABILIZATION_PLAN.md](docs/JJ_AI_DISPATCHER_P0_P3_STABILIZATION_PLAN.md), with a byte-identical project-source mirror at [source/JJ_AI_DISPATCHER_P0_P3_STABILIZATION_PLAN.md](source/JJ_AI_DISPATCHER_P0_P3_STABILIZATION_PLAN.md).
 
-Current release metadata baseline is `0.8.0`, selected as the stabilization-development baseline after the existing historical Git tag sequence through `v0.7-autonomous-sprint-poc`. Historical tags and phase records remain unchanged. The final `v0.8.0` Git tag is deferred until P0-P3 final stabilization acceptance; do not create it during P0.2 metadata alignment.
+Current release metadata baseline is `0.8.0`. The annotated Git tag `v0.8.0` exists and marks completion of the P0-P3 stabilization baseline. Historical tags and phase records remain unchanged.
+
+Next planning candidate: P4 Controlled Unattended Execution. P4 is planning-only at this standing; this README does not authorize implementation, launcher behavior changes, MCP tool changes, scheduling, unattended chaining, or new autonomous execution behavior.
+
+Approved future observability item: Dispatcher Live Codex Console Output. This item may be planned after P0-P3 as an observability improvement, but it is not part of the v0.8.0 runtime baseline and is not authorized for implementation by this document.
 
 ## MCP Tool Surface
 
