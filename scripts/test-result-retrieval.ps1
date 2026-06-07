@@ -99,10 +99,17 @@ if ($errors.Count -gt 0) {
     "Normalize-WorkerReportFields",
     "Normalize-PushDecisionFields",
     "Set-RunDerivedFields",
+    "ConvertTo-IsoTimestampString",
     "Get-DeliveryRecoveryMessage",
+    "Resolve-RepoTarget",
+    "New-TaskId",
     "Test-TaskId",
     "Get-RunsRoot",
+    "New-AcceptedRunContext",
+    "Write-FailedAcceptedRunResult",
     "Get-RunResultPath",
+    "Get-RunTaskPath",
+    "Convert-TaskContractToRunResult",
     "Normalize-RunResultContract",
     "ConvertTo-ComparablePath",
     "Test-RunResultBelongsToProject",
@@ -120,12 +127,31 @@ try {
     $mainRunning = "20260607-010200-mainrun"
     $tempNewer = "20260607-010300-tempnew"
     $mismatch = "20260607-010400-mismatch"
+    $acceptedOnly = "20260607-010500-accepted"
+    $collision = "20260607-010600-collision"
+    $afterCollision = "20260607-010601-unique"
 
     New-TestRunArtifact -TaskId $mainOld -ExecutionStatus "success" -Repo $projectRoot -OldShape
     New-TestRunArtifact -TaskId $mainTimeout -ExecutionStatus "success" -Repo $projectRoot
     New-TestRunArtifact -TaskId $mainRunning -ExecutionStatus "running" -Repo $projectRoot
     New-TestRunArtifact -TaskId $tempNewer -ExecutionStatus "success" -Repo (Join-Path $tempRoot "lifecycle-temp-repo")
     New-TestRunArtifact -TaskId $mismatch -ExecutionStatus "success" -Repo $projectRoot -ResultTaskId "20260607-010401-other"
+    New-Item -ItemType Directory -Path (Join-Path $runsRoot $acceptedOnly) -Force | Out-Null
+    Set-Content -LiteralPath (Join-Path (Join-Path $runsRoot $acceptedOnly) "task.json") -Value (([ordered]@{
+        taskId = $acceptedOnly
+        status = "accepted"
+        executionStatus = "queued"
+        acceptedAt = "2026-06-07T01:05:00.0000000+08:00"
+        repo = "self"
+        resolvedRepo = $projectRoot
+        worker = "codex"
+        task = "accepted only"
+        commitMessage = "test: accepted only"
+        sequenceId = $null
+        sequenceIndex = $null
+        sequenceParentTaskId = $null
+        sequenceRootTaskId = $null
+    }) | ConvertTo-Json -Depth 10) -Encoding UTF8 -NoNewline
 
     $latest = Get-LatestRunTaskId
     Assert-Equal -Actual $latest -Expected $mainTimeout -Message "Latest completed main repo run selection failed."
@@ -145,6 +171,27 @@ try {
 
     $restartReload = Get-RunResultContract -TaskId $mainTimeout
     Assert-Equal -Actual $restartReload.taskId -Expected $mainTimeout -Message "restart-style persisted reload returned wrong taskId."
+
+    $acceptedReload = Get-RunResultContract -TaskId $acceptedOnly
+    Assert-Equal -Actual $acceptedReload.taskId -Expected $acceptedOnly -Message "accepted get-run returned wrong taskId."
+    Assert-Equal -Actual $acceptedReload.executionStatus -Expected "queued" -Message "accepted get-run executionStatus failed."
+    Assert-Equal -Actual $acceptedReload.acceptedAt -Expected "2026-06-07T01:05:00.0000000+08:00" -Message "accepted get-run acceptedAt failed."
+    Assert-Equal -Actual $acceptedReload.artifacts.task -Expected "dispatcher/runs/$acceptedOnly/task.json" -Message "accepted get-run task artifact path failed."
+    Assert-Equal -Actual $acceptedReload.artifacts.result -Expected "dispatcher/runs/$acceptedOnly/result.json" -Message "accepted get-run result artifact path failed."
+
+    New-Item -ItemType Directory -Path (Join-Path $runsRoot $collision) -Force | Out-Null
+    $env:JJ_DISPATCHER_TEST_TASK_ID_SEQUENCE = "$collision,$afterCollision"
+    $acceptedContext = New-AcceptedRunContext -Dispatch ([pscustomobject]@{
+        repo = "self"
+        worker = "codex"
+        task = "collision allocation"
+        commitMessage = "test: collision allocation"
+    })
+    Remove-Item Env:\JJ_DISPATCHER_TEST_TASK_ID_SEQUENCE -ErrorAction SilentlyContinue
+    Assert-Equal -Actual $acceptedContext.TaskId -Expected $afterCollision -Message "duplicate taskId allocation did not regenerate safely."
+    if (-not (Test-Path -LiteralPath $acceptedContext.TaskPath -PathType Leaf)) { throw "accepted allocation did not persist task.json." }
+    Assert-Equal -Actual $acceptedContext.TaskRelativePath -Expected "dispatcher/runs/$afterCollision/task.json" -Message "accepted task relative path failed."
+    Assert-Equal -Actual $acceptedContext.ResultRelativePath -Expected "dispatcher/runs/$afterCollision/result.json" -Message "accepted result relative path failed."
 
     $missingSafe = $false
     try {
@@ -170,6 +217,8 @@ try {
         getRunExecutionStatus = $run.executionStatus
         getRunDeliveryStatus = $run.deliveryStatus
         restartReloadTaskId = $restartReload.taskId
+        acceptedReloadTaskId = $acceptedReload.taskId
+        duplicateRegeneratedTaskId = $acceptedContext.TaskId
         oldRunDeliveryStatus = $old.deliveryStatus
         tempRepoIgnored = $tempNewer
         runningRunIgnored = $mainRunning
@@ -178,6 +227,7 @@ try {
     } | ConvertTo-Json -Depth 5
 }
 finally {
+    Remove-Item Env:\JJ_DISPATCHER_TEST_TASK_ID_SEQUENCE -ErrorAction SilentlyContinue
     if ([System.IO.Directory]::Exists($tempRoot)) {
         [System.IO.Directory]::Delete($tempRoot, $true)
     }

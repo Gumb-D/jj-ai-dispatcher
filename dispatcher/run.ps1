@@ -29,9 +29,26 @@ function New-LogFile {
 }
 
 function New-TaskId {
+    $testTaskIds = [Environment]::GetEnvironmentVariable("JJ_DISPATCHER_TEST_TASK_ID_SEQUENCE")
+    if (-not [string]::IsNullOrWhiteSpace($testTaskIds)) {
+        $ids = @($testTaskIds -split "," | ForEach-Object { $_.Trim() } | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
+        if ($ids.Count -gt 0) {
+            $next = $ids[0]
+            $remaining = @($ids | Select-Object -Skip 1)
+            [Environment]::SetEnvironmentVariable("JJ_DISPATCHER_TEST_TASK_ID_SEQUENCE", ($remaining -join ","))
+            return $next
+        }
+    }
+
     $timestamp = Get-Date -Format "yyyyMMdd-HHmmss"
     $suffix = [guid]::NewGuid().ToString("N").Substring(0, 8)
     return "$timestamp-$suffix"
+}
+
+function Test-TaskId {
+    param([string]$TaskId)
+
+    return -not [string]::IsNullOrWhiteSpace($TaskId) -and $TaskId -match '^[0-9]{8}-[0-9]{6}-[A-Za-z0-9_-]+$'
 }
 
 function New-RunContext {
@@ -51,6 +68,26 @@ function New-RunContext {
         StderrLog = Join-Path $runDir "codex-error.log"
         DiffPatch = Join-Path $runDir "git-diff.patch"
     }
+}
+
+function Get-CodexTaskMetadata {
+    $metadataPath = Join-Path $PSScriptRoot "inbox\codex-task.meta.json"
+    if (-not (Test-Path -LiteralPath $metadataPath -PathType Leaf)) {
+        return $null
+    }
+
+    try {
+        $metadata = Get-Content -LiteralPath $metadataPath -Raw | ConvertFrom-Json
+    }
+    catch {
+        throw "Invalid codex task metadata: $($_.Exception.Message)"
+    }
+
+    if (-not $metadata.PSObject.Properties.Name.Contains("taskId") -or -not (Test-TaskId -TaskId ([string]$metadata.taskId))) {
+        throw "Invalid codex task metadata: malformed taskId."
+    }
+
+    return $metadata
 }
 
 function ConvertTo-DispatcherRelativePath {
@@ -188,6 +225,48 @@ function Set-ResultDerivedFields {
 
     $detail = if ($ResultContract.PSObject.Properties.Name.Contains("deliveryDetail")) { [string]$ResultContract.deliveryDetail } else { "" }
     Set-ObjectProperty -Object $ResultContract -Name "recovery" -Value (Get-DeliveryRecoveryMessage -DeliveryStatus $ResultContract.deliveryStatus -Detail $detail)
+}
+
+function Set-CorrelationFields {
+    param(
+        [object]$Contract,
+        [object]$TaskContract
+    )
+
+    if ($null -eq $Contract -or $null -eq $TaskContract) {
+        return
+    }
+
+    foreach ($name in @("acceptedAt", "sequenceId", "sequenceIndex", "sequenceParentTaskId", "sequenceRootTaskId")) {
+        $value = $null
+        if ($TaskContract -is [System.Collections.Specialized.OrderedDictionary] -and $TaskContract.Contains($name)) {
+            $value = $TaskContract[$name]
+        }
+        elseif ($TaskContract -is [System.Collections.IDictionary] -and $TaskContract.Contains($name)) {
+            $value = $TaskContract[$name]
+        }
+        elseif ($TaskContract.PSObject.Properties.Name.Contains($name)) {
+            $value = $TaskContract.$name
+        }
+        if ($name -eq "acceptedAt") {
+            $value = ConvertTo-IsoTimestampString -Value $value
+        }
+        Set-ObjectProperty -Object $Contract -Name $name -Value $value
+    }
+}
+
+function ConvertTo-IsoTimestampString {
+    param([object]$Value)
+
+    if ($null -eq $Value) {
+        return $null
+    }
+
+    if ($Value -is [datetime]) {
+        return $Value.ToString("o")
+    }
+
+    return [string]$Value
 }
 
 function Write-JsonFile {
@@ -1098,11 +1177,13 @@ $runStartedAt = $null
 $workerLogsCaptured = $false
 
 if ($task.worker -eq "codex_inbox") {
-    $taskId = New-TaskId
+    $taskMetadata = Get-CodexTaskMetadata
+    $taskId = if ($null -ne $taskMetadata) { [string]$taskMetadata.taskId } else { New-TaskId }
     $runContext = New-RunContext -TaskId $taskId
     $taskText = Get-CodexTaskPrompt
     $commitMessage = Get-CodexTaskCommitMessage -DispatcherRoot $PSScriptRoot
     $resolvedRepoPath = if (Test-Path -LiteralPath $repoPath -PathType Container) { (Resolve-Path -LiteralPath $repoPath).Path } else { $repoPath }
+    $acceptedAt = if ($null -ne $taskMetadata -and $taskMetadata.PSObject.Properties.Name.Contains("acceptedAt") -and -not [string]::IsNullOrWhiteSpace($taskMetadata.acceptedAt)) { ConvertTo-IsoTimestampString -Value $taskMetadata.acceptedAt } else { (Get-Date).ToString("o") }
 
     Set-Content -LiteralPath $runContext.StdoutLog -Value "" -Encoding UTF8 -NoNewline
     Set-Content -LiteralPath $runContext.StderrLog -Value "" -Encoding UTF8 -NoNewline
@@ -1112,7 +1193,8 @@ if ($task.worker -eq "codex_inbox") {
         taskId = $taskId
         status = "created"
         executionStatus = "queued"
-        createdAt = (Get-Date).ToString("o")
+        acceptedAt = $acceptedAt
+        createdAt = $acceptedAt
         startedAt = $null
         completedAt = $null
         durationMs = $null
@@ -1121,6 +1203,10 @@ if ($task.worker -eq "codex_inbox") {
         worker = "codex"
         task = $taskText
         commitMessage = $commitMessage
+        sequenceId = if ($null -ne $taskMetadata -and $taskMetadata.PSObject.Properties.Name.Contains("sequenceId")) { $taskMetadata.sequenceId } else { $null }
+        sequenceIndex = if ($null -ne $taskMetadata -and $taskMetadata.PSObject.Properties.Name.Contains("sequenceIndex")) { $taskMetadata.sequenceIndex } else { $null }
+        sequenceParentTaskId = if ($null -ne $taskMetadata -and $taskMetadata.PSObject.Properties.Name.Contains("sequenceParentTaskId")) { $taskMetadata.sequenceParentTaskId } else { $null }
+        sequenceRootTaskId = if ($null -ne $taskMetadata -and $taskMetadata.PSObject.Properties.Name.Contains("sequenceRootTaskId")) { $taskMetadata.sequenceRootTaskId } else { $null }
     }
     Write-JsonFile -Path $runContext.TaskJson -Value $taskContract
 }
@@ -1237,6 +1323,7 @@ exit `$LASTEXITCODE
             -StdoutPath $runContext.StdoutLog `
             -StderrPath $runContext.StderrLog `
             -DiffPath $runContext.DiffPatch
+        Set-CorrelationFields -Contract $resultContract -TaskContract $taskContract
         Set-WorkerReportFields -ResultContract $resultContract -WorkerResult $result
 
         if ($result.ExitCode -eq 0) {
@@ -1309,6 +1396,7 @@ if ($runContext) {
             -StdoutPath $runContext.StdoutLog `
             -StderrPath $runContext.StderrLog `
             -DiffPath $runContext.DiffPatch
+        Set-CorrelationFields -Contract $resultContract -TaskContract $taskContract
         Set-WorkerReportFields -ResultContract $resultContract -WorkerResult $result
     }
 

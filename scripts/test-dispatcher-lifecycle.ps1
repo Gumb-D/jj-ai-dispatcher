@@ -17,7 +17,8 @@ $inboxFiles = @(
     "codex-task.txt",
     "codex-task.repo.txt",
     "codex-task.commit.txt",
-    "codex-task.push.txt"
+    "codex-task.push.txt",
+    "codex-task.meta.json"
 )
 
 $backups = @{}
@@ -180,6 +181,7 @@ function Invoke-LifecycleCase {
         [string]$WorkerPath,
         [string]$GitExe = "",
         [string]$PushControl = "",
+        [string]$PreallocatedTaskId = "",
         [switch]$AllowAutoPush
     )
 
@@ -192,6 +194,22 @@ function Invoke-LifecycleCase {
     }
     else {
         Set-Content -LiteralPath (Join-Path $inboxRoot "codex-task.push.txt") -Value $PushControl -Encoding UTF8
+    }
+    if ([string]::IsNullOrWhiteSpace($PreallocatedTaskId)) {
+        Remove-Item -LiteralPath (Join-Path $inboxRoot "codex-task.meta.json") -ErrorAction SilentlyContinue
+    }
+    else {
+        $metadata = [ordered]@{
+            taskId = $PreallocatedTaskId
+            acceptedAt = "2026-06-07T02:00:00.0000000+08:00"
+            taskPath = "dispatcher/runs/$PreallocatedTaskId/task.json"
+            resultPath = "dispatcher/runs/$PreallocatedTaskId/result.json"
+            sequenceId = $null
+            sequenceIndex = $null
+            sequenceParentTaskId = $null
+            sequenceRootTaskId = $null
+        }
+        Set-Content -LiteralPath (Join-Path $inboxRoot "codex-task.meta.json") -Value ($metadata | ConvertTo-Json -Depth 10) -Encoding UTF8 -NoNewline
     }
 
     $env:JJ_DISPATCHER_TEST_WORKER_COMMAND = $WorkerPath
@@ -214,12 +232,17 @@ function Invoke-LifecycleCase {
     $exitCode = $LASTEXITCODE
     $run = Get-LatestRun
     $resultPath = Join-Path $run.FullName "result.json"
+    $taskPath = Join-Path $run.FullName "task.json"
     $summaryPath = Join-Path $run.FullName "summary.md"
     $stdoutPath = Join-Path $run.FullName "codex-output.log"
     $stderrPath = Join-Path $run.FullName "codex-error.log"
     $result = Get-Content -LiteralPath $resultPath -Raw | ConvertFrom-Json
+    $taskJson = Get-Content -LiteralPath $taskPath -Raw | ConvertFrom-Json
     $expectedExecutionStatus = if ($exitCode -eq 0) { "success" } else { "failed" }
 
+    if (-not [string]::IsNullOrWhiteSpace($PreallocatedTaskId) -and $run.Name -ne $PreallocatedTaskId) { throw "$Name did not use preallocated taskId." }
+    if ($taskJson.taskId -ne $result.taskId) { throw "$Name task.json/result.json taskId mismatch." }
+    if (-not [string]::IsNullOrWhiteSpace($PreallocatedTaskId) -and $result.acceptedAt -ne "2026-06-07T02:00:00.0000000+08:00") { throw "$Name did not preserve acceptedAt in result.json." }
     if (-not (Test-Path -LiteralPath $summaryPath -PathType Leaf)) { throw "$Name missing summary.md" }
     if (-not (Test-Path -LiteralPath $stdoutPath -PathType Leaf)) { throw "$Name missing codex-output.log" }
     if (-not (Test-Path -LiteralPath $stderrPath -PathType Leaf)) { throw "$Name missing codex-error.log" }
@@ -236,6 +259,8 @@ function Invoke-LifecycleCase {
         mode = $Mode
         processExitCode = $exitCode
         taskId = $result.taskId
+        taskJsonTaskId = $taskJson.taskId
+        acceptedAt = if ($result.PSObject.Properties.Name.Contains("acceptedAt")) { $result.acceptedAt } else { $null }
         status = $result.status
         executionStatus = $result.executionStatus
         deliveryStatus = $result.deliveryStatus
@@ -269,8 +294,12 @@ try {
     $pushFailureGit = Write-FakeGit -FailPush
     $pushMarker = Join-Path $tempRoot "fake-git-push.marker"
     $results = @()
-    $success = Invoke-LifecycleCase -Name "success" -Mode "success" -WorkerPath $worker
+    $preallocatedSuccessId = "20260607-020000-prealloc"
+    $success = Invoke-LifecycleCase -Name "success" -Mode "success" -WorkerPath $worker -PreallocatedTaskId $preallocatedSuccessId
     $results += $success
+    if ($success.taskId -ne $preallocatedSuccessId) { throw "success did not return the preallocated taskId." }
+    if ($success.taskJsonTaskId -ne $preallocatedSuccessId) { throw "success task.json did not use the preallocated taskId." }
+    if ($success.acceptedAt -ne "2026-06-07T02:00:00.0000000+08:00") { throw "success did not preserve acceptedAt." }
     if ([string]::IsNullOrWhiteSpace($success.commit)) { throw "success did not record dispatcher-owned commit." }
     if ($success.pushed -ne $false) { throw "success pushed without explicit push control." }
     if ($success.pushDecisionShouldPush -ne $false) { throw "success push decision expected shouldPush=false." }

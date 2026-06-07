@@ -163,6 +163,20 @@ function Set-RunDerivedFields {
     Set-ObjectProperty -Object $Result -Name "recovery" -Value (Get-DeliveryRecoveryMessage -DeliveryStatus $Result.deliveryStatus -Detail $detail)
 }
 
+function ConvertTo-IsoTimestampString {
+    param([object]$Value)
+
+    if ($null -eq $Value) {
+        return $null
+    }
+
+    if ($Value -is [datetime]) {
+        return $Value.ToString("o")
+    }
+
+    return [string]$Value
+}
+
 function Get-DeliveryRecoveryMessage {
     param(
         [string]$DeliveryStatus,
@@ -458,8 +472,165 @@ function Resolve-RepoTarget {
     return $Value
 }
 
-function Write-DispatchInboxFiles {
+function New-TaskId {
+    $testTaskIds = [Environment]::GetEnvironmentVariable("JJ_DISPATCHER_TEST_TASK_ID_SEQUENCE")
+    if (-not [string]::IsNullOrWhiteSpace($testTaskIds)) {
+        $ids = @($testTaskIds -split "," | ForEach-Object { $_.Trim() } | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
+        if ($ids.Count -gt 0) {
+            $next = $ids[0]
+            $remaining = @($ids | Select-Object -Skip 1)
+            [Environment]::SetEnvironmentVariable("JJ_DISPATCHER_TEST_TASK_ID_SEQUENCE", ($remaining -join ","))
+            return $next
+        }
+    }
+
+    $timestamp = Get-Date -Format "yyyyMMdd-HHmmss"
+    $suffix = [guid]::NewGuid().ToString("N").Substring(0, 8)
+    return "$timestamp-$suffix"
+}
+
+function Get-RunsRoot {
+    return Join-Path $dispatcherRoot "runs"
+}
+
+function Test-TaskId {
+    param([string]$TaskId)
+
+    return -not [string]::IsNullOrWhiteSpace($TaskId) -and $TaskId -match '^[0-9]{8}-[0-9]{6}-[A-Za-z0-9_-]+$'
+}
+
+function New-AcceptedRunContext {
     param([pscustomobject]$Dispatch)
+
+    $runsRoot = Get-RunsRoot
+    if (-not (Test-Path -LiteralPath $runsRoot -PathType Container)) {
+        New-Item -ItemType Directory -Path $runsRoot | Out-Null
+    }
+
+    for ($attempt = 0; $attempt -lt 10; $attempt++) {
+        $taskId = New-TaskId
+        if (-not (Test-TaskId -TaskId $taskId)) {
+            throw "Generated malformed taskId."
+        }
+
+        $runDir = Join-Path $runsRoot $taskId
+        if (Test-Path -LiteralPath $runDir) {
+            Write-BridgeStep "Generated duplicate taskId $taskId; retrying allocation."
+            continue
+        }
+
+        New-Item -ItemType Directory -Path $runDir -ErrorAction Stop | Out-Null
+        $acceptedAt = (Get-Date).ToString("o")
+        $resolvedRepo = ""
+        if ($Dispatch.PSObject.Properties.Name.Contains("repo") -and -not [string]::IsNullOrWhiteSpace($Dispatch.repo)) {
+            $resolvedRepo = Resolve-RepoTarget -Value $Dispatch.repo
+        }
+
+        $taskPath = Join-Path $runDir "task.json"
+        $resultPath = Join-Path $runDir "result.json"
+        $taskContract = [ordered]@{
+            taskId = $taskId
+            status = "accepted"
+            executionStatus = "queued"
+            acceptedAt = $acceptedAt
+            createdAt = $acceptedAt
+            startedAt = $null
+            completedAt = $null
+            durationMs = $null
+            repo = if ($Dispatch.PSObject.Properties.Name.Contains("repo")) { [string]$Dispatch.repo } else { "" }
+            resolvedRepo = $resolvedRepo
+            worker = "codex"
+            task = [string]$Dispatch.task
+            commitMessage = if ($Dispatch.PSObject.Properties.Name.Contains("commitMessage")) { [string]$Dispatch.commitMessage } else { "" }
+            sequenceId = $null
+            sequenceIndex = $null
+            sequenceParentTaskId = $null
+            sequenceRootTaskId = $null
+        }
+        Write-JsonFile -Path $taskPath -Value $taskContract
+
+        return [pscustomobject]@{
+            TaskId = $taskId
+            AcceptedAt = $acceptedAt
+            RunDir = $runDir
+            TaskPath = $taskPath
+            ResultPath = $resultPath
+            TaskRelativePath = "dispatcher/runs/$taskId/task.json"
+            ResultRelativePath = "dispatcher/runs/$taskId/result.json"
+        }
+    }
+
+    throw "Unable to allocate a unique dispatcher taskId."
+}
+
+function Write-FailedAcceptedRunResult {
+    param(
+        [pscustomobject]$RunContext,
+        [pscustomobject]$Dispatch,
+        [string]$ErrorMessage
+)
+
+    $completedAt = (Get-Date).ToString("o")
+    $safeErrorMessage = if ([string]::IsNullOrWhiteSpace($ErrorMessage)) { "Worker process did not start." } else { [string]$ErrorMessage }
+    $taskPath = $RunContext.TaskPath
+    if (Test-Path -LiteralPath $taskPath -PathType Leaf) {
+        $taskContract = Get-Content -LiteralPath $taskPath -Raw | ConvertFrom-Json
+        Set-ObjectProperty -Object $taskContract -Name "status" -Value "failed"
+        Set-ObjectProperty -Object $taskContract -Name "executionStatus" -Value "failed"
+        Set-ObjectProperty -Object $taskContract -Name "completedAt" -Value $completedAt
+        Write-JsonFile -Path $taskPath -Value $taskContract
+    }
+
+    $result = [ordered]@{
+        taskId = $RunContext.TaskId
+        status = "failed"
+        executionStatus = "failed"
+        deliveryStatus = "not_requested"
+        deliveryChannel = $null
+        deliveryRequired = $false
+        acceptedAt = $RunContext.AcceptedAt
+        completedAt = $completedAt
+        repo = if ($Dispatch.PSObject.Properties.Name.Contains("repo")) { Resolve-RepoTarget -Value $Dispatch.repo } else { "" }
+        worker = "codex"
+        filesChanged = @()
+        commit = $null
+        commitMessage = if ($Dispatch.PSObject.Properties.Name.Contains("commitMessage")) { [string]$Dispatch.commitMessage } else { "" }
+        pushed = $false
+        globalAutoPushAllowed = $false
+        pushDecision = [ordered]@{
+            shouldPush = $false
+            source = "not_evaluated"
+            reason = "Worker process did not start."
+        }
+        pushDecisionReason = "Worker process did not start."
+        workingTreeClean = $false
+        summary = "Dispatcher task failed before worker start."
+        workerSummary = "Dispatcher task failed before worker start."
+        workerReport = $safeErrorMessage
+        workerReportMetadata = [ordered]@{
+            maxLength = $WorkerReportMaxLength
+            originalLength = $safeErrorMessage.Length
+            persistedLength = $safeErrorMessage.Length
+            truncated = $false
+            redacted = $true
+        }
+        workerReportTruncated = $false
+        logs = [ordered]@{}
+        needsReview = $true
+        reviewHints = @($safeErrorMessage)
+        sequenceId = $null
+        sequenceIndex = $null
+        sequenceParentTaskId = $null
+        sequenceRootTaskId = $null
+    }
+    Write-JsonFile -Path $RunContext.ResultPath -Value $result
+}
+
+function Write-DispatchInboxFiles {
+    param(
+        [pscustomobject]$Dispatch,
+        [pscustomobject]$RunContext
+    )
 
     $inboxDir = Join-Path $dispatcherRoot "inbox"
     if (-not (Test-Path -LiteralPath $inboxDir -PathType Container)) {
@@ -483,6 +654,24 @@ function Write-DispatchInboxFiles {
     }
     else {
         Remove-Item -LiteralPath $commitPath -ErrorAction SilentlyContinue
+    }
+
+    $metadataPath = Join-Path $inboxDir "codex-task.meta.json"
+    if ($null -ne $RunContext) {
+        $metadata = [ordered]@{
+            taskId = $RunContext.TaskId
+            acceptedAt = $RunContext.AcceptedAt
+            taskPath = $RunContext.TaskRelativePath
+            resultPath = $RunContext.ResultRelativePath
+            sequenceId = $null
+            sequenceIndex = $null
+            sequenceParentTaskId = $null
+            sequenceRootTaskId = $null
+        }
+        Write-JsonFile -Path $metadataPath -Value $metadata
+    }
+    else {
+        Remove-Item -LiteralPath $metadataPath -ErrorAction SilentlyContinue
     }
 }
 
@@ -562,6 +751,7 @@ function Invoke-DispatchRequest {
         return
     }
 
+    $acceptedRun = $null
     try {
         if ($dispatch.PSObject.Properties.Name.Contains("conversationUuid")) {
             $State.ActiveConversationUuid = [string]$dispatch.conversationUuid
@@ -572,7 +762,8 @@ function Invoke-DispatchRequest {
         $State.ActivePostback = $null
         $State.PostbackStartTicks = 0
 
-        Write-DispatchInboxFiles -Dispatch $dispatch
+        $acceptedRun = New-AcceptedRunContext -Dispatch $dispatch
+        Write-DispatchInboxFiles -Dispatch $dispatch -RunContext $acceptedRun
         $process = Start-DispatcherCodexTask
         $State.TaskState = "running"
         $State.ActiveProcess = $process
@@ -582,9 +773,16 @@ function Invoke-DispatchRequest {
         $State.TaskState = "idle"
         $State.ActiveProcess = $null
         $State.ActiveStartedAt = $null
+        if ($null -ne $acceptedRun) {
+            Write-FailedAcceptedRunResult -RunContext $acceptedRun -Dispatch $dispatch -ErrorMessage $_.Exception.Message
+        }
         Write-JsonResponse -Response $response -StatusCode 500 -Body ([ordered]@{
             accepted = $false
             status = "failed"
+            taskId = if ($null -ne $acceptedRun) { $acceptedRun.TaskId } else { $null }
+            acceptedAt = if ($null -ne $acceptedRun) { $acceptedRun.AcceptedAt } else { $null }
+            taskPath = if ($null -ne $acceptedRun) { $acceptedRun.TaskRelativePath } else { $null }
+            resultPath = if ($null -ne $acceptedRun) { $acceptedRun.ResultRelativePath } else { $null }
             error = $_.Exception.Message
         })
         return
@@ -596,17 +794,11 @@ function Invoke-DispatchRequest {
         worker = "codex"
         taskState = $State.TaskState
         processId = $process.Id
+        taskId = $acceptedRun.TaskId
+        acceptedAt = $acceptedRun.AcceptedAt
+        taskPath = $acceptedRun.TaskRelativePath
+        resultPath = $acceptedRun.ResultRelativePath
     })
-}
-
-function Test-TaskId {
-    param([string]$TaskId)
-
-    return -not [string]::IsNullOrWhiteSpace($TaskId) -and $TaskId -match '^[0-9]{8}-[0-9]{6}-[A-Za-z0-9]+$'
-}
-
-function Get-RunsRoot {
-    return Join-Path $dispatcherRoot "runs"
 }
 
 function Get-RunResultPath {
@@ -622,6 +814,60 @@ function Get-RunResultPath {
     }
 
     return Join-Path $resolvedRunPath "result.json"
+}
+
+function Get-RunTaskPath {
+    param([string]$TaskId)
+
+    $runsRoot = Get-RunsRoot
+    $runPath = Join-Path $runsRoot $TaskId
+    $resolvedRunsRoot = [System.IO.Path]::GetFullPath($runsRoot)
+    $resolvedRunPath = [System.IO.Path]::GetFullPath($runPath)
+
+    if (-not $resolvedRunPath.StartsWith($resolvedRunsRoot, [System.StringComparison]::OrdinalIgnoreCase)) {
+        throw "Run path escaped dispatcher/runs."
+    }
+
+    return Join-Path $resolvedRunPath "task.json"
+}
+
+function Convert-TaskContractToRunResult {
+    param([object]$Task)
+
+    $taskId = if ($Task.PSObject.Properties.Name.Contains("taskId")) { [string]$Task.taskId } else { "" }
+    $executionStatus = if ($Task.PSObject.Properties.Name.Contains("executionStatus") -and -not [string]::IsNullOrWhiteSpace($Task.executionStatus)) { [string]$Task.executionStatus } else { "queued" }
+    $acceptedAt = if ($Task.PSObject.Properties.Name.Contains("acceptedAt")) { ConvertTo-IsoTimestampString -Value $Task.acceptedAt } else { $null }
+
+    return [pscustomobject][ordered]@{
+        taskId = $taskId
+        status = $executionStatus
+        executionStatus = $executionStatus
+        deliveryStatus = "not_requested"
+        deliveryChannel = $null
+        deliveryRequired = $false
+        acceptedAt = $acceptedAt
+        repo = if ($Task.PSObject.Properties.Name.Contains("resolvedRepo") -and -not [string]::IsNullOrWhiteSpace($Task.resolvedRepo)) { [string]$Task.resolvedRepo } elseif ($Task.PSObject.Properties.Name.Contains("repo")) { [string]$Task.repo } else { "" }
+        worker = if ($Task.PSObject.Properties.Name.Contains("worker")) { [string]$Task.worker } else { "codex" }
+        filesChanged = @()
+        commit = $null
+        commitMessage = if ($Task.PSObject.Properties.Name.Contains("commitMessage")) { [string]$Task.commitMessage } else { "" }
+        pushed = $false
+        globalAutoPushAllowed = $false
+        pushDecision = [pscustomobject][ordered]@{
+            shouldPush = $false
+            source = "not_evaluated"
+            reason = "Run has been accepted but has not completed."
+        }
+        pushDecisionReason = "Run has been accepted but has not completed."
+        workingTreeClean = $false
+        summary = "Dispatcher task accepted and queued."
+        needsReview = $false
+        reviewHints = @()
+        sequenceId = if ($Task.PSObject.Properties.Name.Contains("sequenceId")) { $Task.sequenceId } else { $null }
+        sequenceIndex = if ($Task.PSObject.Properties.Name.Contains("sequenceIndex")) { $Task.sequenceIndex } else { $null }
+        sequenceParentTaskId = if ($Task.PSObject.Properties.Name.Contains("sequenceParentTaskId")) { $Task.sequenceParentTaskId } else { $null }
+        sequenceRootTaskId = if ($Task.PSObject.Properties.Name.Contains("sequenceRootTaskId")) { $Task.sequenceRootTaskId } else { $null }
+    }
 }
 
 function Normalize-RunResultContract {
@@ -778,7 +1024,23 @@ function Get-RunResultContract {
     }
 
     if (-not (Test-Path -LiteralPath $resultPath -PathType Leaf)) {
-        throw "not_found:Run result not found."
+        $taskPath = Get-RunTaskPath -TaskId $TaskId
+        if (-not (Test-Path -LiteralPath $taskPath -PathType Leaf)) {
+            throw "not_found:Run result not found."
+        }
+
+        try {
+            $task = Get-Content -LiteralPath $taskPath -Raw | ConvertFrom-Json
+        }
+        catch {
+            throw "invalid_result_json:Run task JSON could not be parsed."
+        }
+
+        if ($task.PSObject.Properties.Name.Contains("taskId") -and [string]$task.taskId -ne $TaskId) {
+            throw "invalid_result_contract:Run taskId does not match requested taskId."
+        }
+
+        return Normalize-RunResultContract -Result (Convert-TaskContractToRunResult -Task $task)
     }
 
     try {

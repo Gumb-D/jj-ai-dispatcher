@@ -106,7 +106,17 @@ async function testToolRegistrationAndSafety() {
     }),
     dispatch: (payload) => {
       calls.push(payload);
-      return { accepted: true, status: "running", worker: "codex", taskState: "running", processId: 123 };
+      return {
+        accepted: true,
+        status: "running",
+        worker: "codex",
+        taskState: "running",
+        processId: 123,
+        taskId: "20260607-010000-contract",
+        acceptedAt: "2026-06-07T01:00:00.0000000+08:00",
+        taskPath: "dispatcher/runs/20260607-010000-contract/task.json",
+        resultPath: "dispatcher/runs/20260607-010000-contract/result.json"
+      };
     },
     latestResult: () => ({ status: "error", errorType: "bridge_error", message: "No run results found.", retryable: false, bridgeStatus: 404 }),
     getRun: () => ({ taskId: "20260607-010000-contract", status: "success" })
@@ -129,6 +139,10 @@ async function testToolRegistrationAndSafety() {
 
   const accepted = parseToolResult(await registry.call("dispatcher_dispatch", makeValidDispatch()));
   assert(accepted.accepted === true && calls.length === 1, "valid dispatch was not forwarded");
+  assert(accepted.taskId === "20260607-010000-contract", "dispatch response taskId missing");
+  assert(typeof accepted.acceptedAt === "string" && accepted.acceptedAt.length > 0, "dispatch response acceptedAt missing");
+  assert(accepted.taskPath === "dispatcher/runs/20260607-010000-contract/task.json", "dispatch response taskPath missing");
+  assert(accepted.resultPath === "dispatcher/runs/20260607-010000-contract/result.json", "dispatch response resultPath missing");
   assert(calls[0].repo === "self" && calls[0].worker === "codex", "dispatch bridge payload changed");
   assert(calls[0].task.includes("MCP safety fields:"), "dispatch envelope omitted MCP safety fields");
   assert(calls[0].task.includes("- scope:\n  - tests/**"), "dispatch envelope formatting changed");
