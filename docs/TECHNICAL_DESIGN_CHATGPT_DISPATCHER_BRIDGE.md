@@ -7,10 +7,16 @@ This is the live canonical technical design for the JJ AI Dispatcher ChatGPT-to-
 Canonical file:
 
 ```text
+source/TECHNICAL_DESIGN_CHATGPT_DISPATCHER_BRIDGE.md
+```
+
+Current mirror:
+
+```text
 docs/TECHNICAL_DESIGN_CHATGPT_DISPATCHER_BRIDGE.md
 ```
 
-No second mirror is maintained for this design. Earlier interrupted recovery work created an accidental byte-identical `source/` copy; the repository's tracked documentation layout keeps this operator-facing design in `docs/`.
+The mirror exists for operator discoverability. When this design changes, update the canonical file first and keep the mirror identical unless a future docs index explicitly changes that policy.
 
 Current baseline:
 
