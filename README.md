@@ -60,9 +60,7 @@ P0-P3 stabilization is complete. The controlling historical implementation plan 
 
 Current release metadata baseline is `0.8.0`. The annotated Git tag `v0.8.0` exists and marks completion of the P0-P3 stabilization baseline. Historical tags and phase records remain unchanged.
 
-Next planning candidate: P4 Controlled Unattended Execution. P4 is planning-only at this standing; this README does not authorize implementation, launcher behavior changes, MCP tool changes, scheduling, unattended chaining, or new autonomous execution behavior.
-
-Approved future observability item: Dispatcher Live Codex Console Output. This item may be planned after P0-P3 as an observability improvement, but it is not part of the v0.8.0 runtime baseline and is not authorized for implementation by this document.
+Next planning candidate: P4 Controlled Task Sequencing is documented in [docs/phase-4-controlled-task-sequencing-design.md](docs/phase-4-controlled-task-sequencing-design.md), with a byte-identical mirror at [source/phase-4-controlled-task-sequencing-design.md](source/phase-4-controlled-task-sequencing-design.md).
 
 ## MCP Tool Surface
 
