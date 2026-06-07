@@ -87,7 +87,14 @@ export const statusOutputSchema = z.object({
   status: z.string().describe("Status indicator, usually ok or error."),
   dispatcherRoot: z.string().optional().describe("The root directory of the dispatcher."),
   defaultWorker: z.string().optional().describe("Default workspace worker."),
-  autoPush: z.boolean().optional().describe("Whether git auto push is enabled."),
+  autoPush: z.boolean().optional().describe("Backward-compatible alias for globalAutoPushAllowed."),
+  globalAutoPushAllowed: z.boolean().optional().describe("Whether the global safety policy allows Dispatcher git push."),
+  currentTaskPushDecision: z.object({
+    shouldPush: z.boolean().describe("Whether the current inbox push controls resolve to push."),
+    source: z.string().describe("Decision source such as global_default, task_opt_in, task_opt_out, or task_override."),
+    reason: z.string().describe("Human-readable push decision reason.")
+  }).passthrough().optional().describe("Current inbox push decision before a run executes."),
+  currentTaskPushDecisionReason: z.string().optional().describe("Human-readable current task push decision reason."),
   bridgeEnabled: z.boolean().optional().describe("Whether the bridge server is active."),
   taskState: z.string().optional().describe("Current dispatcher task state: idle or running."),
   errorType: z.string().optional().describe("Type classification of this error."),
@@ -138,6 +145,13 @@ export const runOutputSchema = z.object({
   commit: z.string().nullable().optional().describe("Git commit hash if success."),
   commitMessage: z.string().optional().describe("Staged git commit message."),
   pushed: z.boolean().optional().describe("Whether changes were pushed to origin."),
+  globalAutoPushAllowed: z.boolean().optional().describe("Whether the global safety policy allowed Dispatcher git push for this run."),
+  pushDecision: z.object({
+    shouldPush: z.boolean().describe("Whether this run decided to push after commit/no-change evaluation."),
+    source: z.string().describe("Decision source such as global_default, task_opt_in, task_opt_out, or no_changes."),
+    reason: z.string().describe("Human-readable push decision reason.")
+  }).passthrough().optional().describe("Resolved push decision for this run."),
+  pushDecisionReason: z.string().optional().describe("Human-readable resolved push decision reason for this run."),
   workingTreeClean: z.boolean().optional().describe("Whether the git working tree is clean."),
   validationSummary: z.array(z.string()).optional().describe("Focused validation summary captured or derived from the run result."),
   summary: z.string().optional().describe("Human readable summary of the task run."),

@@ -284,9 +284,19 @@ The worker edits files and reports execution output. Dispatcher performs the fin
 - produce run artifacts
 - apply Dispatcher-owned Git add and commit when changes exist
 - record commit hash or no-change state
-- record optional push state
+- resolve and record push state from `safety.allowAutoPush` plus `dispatcher/inbox/codex-task.push.txt`
 - record working-tree state
 - write `result.json` and `summary.md`
+
+Push precedence:
+
+- `safety.allowAutoPush=true` means successful Dispatcher-owned commits push by default when no per-task override exists.
+- `dispatcher/inbox/codex-task.push.txt` values `false`, `no`, `0`, `off`, or `never` explicitly opt out for one task.
+- `true`, `yes`, `1`, `on`, or `always` remain supported as an explicit per-task push request.
+- When `safety.allowAutoPush=false`, no per-task file means no push, and an explicit per-task push request is rejected safely.
+- No-change tasks never push.
+
+Status and result fields use unambiguous names. `dispatcher_status.autoPush` remains a compatibility alias for `globalAutoPushAllowed`; `currentTaskPushDecision` and `currentTaskPushDecisionReason` describe the current inbox controls. Run results persist `pushed`, `globalAutoPushAllowed`, `pushDecision`, and `pushDecisionReason`.
 
 Codex does not own final Git control. ChatGPT does not treat browser delivery as finalization. A run is reviewable when the persisted result records a terminal execution state and the relevant artifacts are available.
 

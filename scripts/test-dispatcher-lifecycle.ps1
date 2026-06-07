@@ -106,10 +106,11 @@ switch ($mode) {
 function Write-FakeGit {
     param(
         [switch]$FailCommit,
-        [switch]$TrackPush
+        [switch]$TrackPush,
+        [switch]$FailPush
     )
 
-    $fakeGitName = if ($FailCommit) { "fake-git-fail-commit.cmd" } elseif ($TrackPush) { "fake-git-track-push.cmd" } else { "fake-git.cmd" }
+    $fakeGitName = if ($FailCommit) { "fake-git-fail-commit.cmd" } elseif ($FailPush) { "fake-git-fail-push.cmd" } elseif ($TrackPush) { "fake-git-track-push.cmd" } else { "fake-git.cmd" }
     $fakeGit = Join-Path $tempRoot $fakeGitName
     $pushMarker = (Join-Path $tempRoot "fake-git-push.marker").Replace("\", "\\")
     $content = if ($FailCommit) {
@@ -140,6 +141,17 @@ if /i "%~1"=="push" (
   echo pushed > "$pushMarker"
   echo fake push
   exit /b 0
+)
+git %*
+"@
+    }
+    elseif ($FailPush) {
+@"
+@echo off
+if /i "%~1"=="push" (
+  echo attempted > "$pushMarker"
+  echo forced git push failure 1>&2
+  exit /b 44
 )
 git %*
 "@
@@ -231,6 +243,10 @@ function Invoke-LifecycleCase {
         needsReview = $result.needsReview
         commit = $result.commit
         pushed = $result.pushed
+        globalAutoPushAllowed = $result.globalAutoPushAllowed
+        pushDecisionShouldPush = $result.pushDecision.shouldPush
+        pushDecisionSource = $result.pushDecision.source
+        pushDecisionReason = $result.pushDecisionReason
         filesChanged = @($result.filesChanged)
         workingTreeClean = $result.workingTreeClean
         reviewHints = @($result.reviewHints)
@@ -250,12 +266,15 @@ try {
     $worker = Write-TestWorker
     $commitFailureGit = Write-FakeGit -FailCommit
     $pushTrackingGit = Write-FakeGit -TrackPush
+    $pushFailureGit = Write-FakeGit -FailPush
     $pushMarker = Join-Path $tempRoot "fake-git-push.marker"
     $results = @()
     $success = Invoke-LifecycleCase -Name "success" -Mode "success" -WorkerPath $worker
     $results += $success
     if ([string]::IsNullOrWhiteSpace($success.commit)) { throw "success did not record dispatcher-owned commit." }
     if ($success.pushed -ne $false) { throw "success pushed without explicit push control." }
+    if ($success.pushDecisionShouldPush -ne $false) { throw "success push decision expected shouldPush=false." }
+    if ($success.pushDecisionSource -ne "global_default") { throw "success push decision source expected global_default." }
     if ($success.workingTreeClean -ne $true) { throw "success workingTreeClean expected true." }
     if (-not ($success.filesChanged -contains "worker-success.txt")) { throw "success did not record worker-success.txt in filesChanged." }
 
@@ -264,6 +283,17 @@ try {
     if ($noChange.status -ne "success") { throw "no-change status expected success but was $($noChange.status)." }
     if ($noChange.commit) { throw "no-change unexpectedly recorded a commit." }
     if ($noChange.workingTreeClean -ne $true) { throw "no-change workingTreeClean expected true." }
+    if ($noChange.pushDecisionSource -ne "no_changes") { throw "no-change push decision source expected no_changes." }
+    if ($noChange.pushDecisionShouldPush -ne $false) { throw "no-change push decision expected shouldPush=false." }
+
+    Remove-Item -LiteralPath $pushMarker -ErrorAction SilentlyContinue
+    $noChangeAutoPush = Invoke-LifecycleCase -Name "no-change-auto-push" -Mode "noop" -WorkerPath $worker -GitExe $pushTrackingGit -AllowAutoPush
+    $results += $noChangeAutoPush
+    if ($noChangeAutoPush.status -ne "success") { throw "no-change-auto-push status expected success but was $($noChangeAutoPush.status)." }
+    if ($noChangeAutoPush.commit) { throw "no-change-auto-push unexpectedly recorded a commit." }
+    if ($noChangeAutoPush.pushed -ne $false) { throw "no-change-auto-push unexpectedly recorded pushed=true." }
+    if ($noChangeAutoPush.pushDecisionSource -ne "no_changes") { throw "no-change-auto-push push decision source expected no_changes." }
+    if (Test-Path -LiteralPath $pushMarker -PathType Leaf) { throw "no-change-auto-push unexpectedly exercised fake git push." }
 
     $results += Invoke-LifecycleCase -Name "failure" -Mode "failure" -WorkerPath $worker
     $results += Invoke-LifecycleCase -Name "timeout" -Mode "hang" -WorkerPath $worker
@@ -277,14 +307,41 @@ try {
     $results += $pushDisabled
     if ($pushDisabled.status -ne "failed") { throw "push-disabled status expected failed but was $($pushDisabled.status)." }
     if ($pushDisabled.pushed -ne $false) { throw "push-disabled unexpectedly recorded pushed=true." }
-    if (-not ($pushDisabled.reviewHints -contains "Auto push disabled by config.")) { throw "push-disabled did not report disabled auto push." }
+    if ($pushDisabled.pushDecisionSource -ne "task_opt_in") { throw "push-disabled push decision source expected task_opt_in." }
+    if (-not ($pushDisabled.reviewHints -contains "Per-task push request was rejected because global allowAutoPush=false.")) { throw "push-disabled did not report disabled auto push." }
+
+    Remove-Item -LiteralPath $pushMarker -ErrorAction SilentlyContinue
+    $globalPush = Invoke-LifecycleCase -Name "global-push-default" -Mode "success" -WorkerPath $worker -GitExe $pushTrackingGit -AllowAutoPush
+    $results += $globalPush
+    if ($globalPush.status -ne "success") { throw "global-push-default status expected success but was $($globalPush.status)." }
+    if ($globalPush.pushed -ne $true) { throw "global-push-default did not record pushed=true." }
+    if ($globalPush.pushDecisionSource -ne "global_default") { throw "global-push-default push decision source expected global_default." }
+    if (-not (Test-Path -LiteralPath $pushMarker -PathType Leaf)) { throw "global-push-default did not exercise fake git push." }
+
+    Remove-Item -LiteralPath $pushMarker -ErrorAction SilentlyContinue
+    $pushOptOut = Invoke-LifecycleCase -Name "push-opt-out" -Mode "success" -WorkerPath $worker -GitExe $pushTrackingGit -PushControl "false" -AllowAutoPush
+    $results += $pushOptOut
+    if ($pushOptOut.status -ne "success") { throw "push-opt-out status expected success but was $($pushOptOut.status)." }
+    if ($pushOptOut.pushed -ne $false) { throw "push-opt-out unexpectedly recorded pushed=true." }
+    if ($pushOptOut.pushDecisionSource -ne "task_opt_out") { throw "push-opt-out push decision source expected task_opt_out." }
+    if (Test-Path -LiteralPath $pushMarker -PathType Leaf) { throw "push-opt-out unexpectedly exercised fake git push." }
 
     Remove-Item -LiteralPath $pushMarker -ErrorAction SilentlyContinue
     $pushAllowed = Invoke-LifecycleCase -Name "push-allowed" -Mode "success" -WorkerPath $worker -GitExe $pushTrackingGit -PushControl "true" -AllowAutoPush
     $results += $pushAllowed
     if ($pushAllowed.status -ne "success") { throw "push-allowed status expected success but was $($pushAllowed.status)." }
     if ($pushAllowed.pushed -ne $true) { throw "push-allowed did not record pushed=true." }
+    if ($pushAllowed.pushDecisionSource -ne "task_opt_in") { throw "push-allowed push decision source expected task_opt_in." }
     if (-not (Test-Path -LiteralPath $pushMarker -PathType Leaf)) { throw "push-allowed did not exercise fake git push." }
+
+    Remove-Item -LiteralPath $pushMarker -ErrorAction SilentlyContinue
+    $pushFailure = Invoke-LifecycleCase -Name "push-failure" -Mode "success" -WorkerPath $worker -GitExe $pushFailureGit -AllowAutoPush
+    $results += $pushFailure
+    if ($pushFailure.status -ne "failed") { throw "push-failure status expected failed but was $($pushFailure.status)." }
+    if ($pushFailure.pushed -ne $false) { throw "push-failure unexpectedly recorded pushed=true." }
+    if ($pushFailure.pushDecisionShouldPush -ne $true) { throw "push-failure push decision expected shouldPush=true." }
+    if (-not ($pushFailure.reviewHints -contains "Git push failed.")) { throw "push-failure did not report Git push failed." }
+    if (-not (Test-Path -LiteralPath $pushMarker -PathType Leaf)) { throw "push-failure did not exercise fake git push." }
 
     $results | Format-Table -AutoSize
 }

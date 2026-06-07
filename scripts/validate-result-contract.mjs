@@ -173,6 +173,12 @@ function assertRunShape(result, expected) {
   assert(typeof result.workerReport === "string", `${expected.label} workerReport missing`);
   assert(typeof result.workerReportMetadata === "object", `${expected.label} workerReportMetadata missing`);
   assert(typeof result.workerReportTruncated === "boolean", `${expected.label} workerReportTruncated missing`);
+  assert(typeof result.globalAutoPushAllowed === "boolean", `${expected.label} globalAutoPushAllowed missing`);
+  assert(typeof result.pushDecision === "object", `${expected.label} pushDecision missing`);
+  assert(typeof result.pushDecision.shouldPush === "boolean", `${expected.label} pushDecision.shouldPush missing`);
+  assert(typeof result.pushDecision.source === "string" && result.pushDecision.source.length > 0, `${expected.label} pushDecision.source missing`);
+  assert(typeof result.pushDecision.reason === "string" && result.pushDecision.reason.length > 0, `${expected.label} pushDecision.reason missing`);
+  assert(typeof result.pushDecisionReason === "string" && result.pushDecisionReason.length > 0, `${expected.label} pushDecisionReason missing`);
 }
 
 async function withServer(handler, callback) {

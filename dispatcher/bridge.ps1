@@ -114,6 +114,36 @@ function Normalize-WorkerReportFields {
     Set-ObjectProperty -Object $Result -Name "workerReportTruncated" -Value $truncated
 }
 
+function Normalize-PushDecisionFields {
+    param([object]$Result)
+
+    $globalAllowed = if ($Result.PSObject.Properties.Name.Contains("globalAutoPushAllowed")) { [bool]$Result.globalAutoPushAllowed } else { $false }
+    Set-ObjectProperty -Object $Result -Name "globalAutoPushAllowed" -Value $globalAllowed
+
+    if (-not $Result.PSObject.Properties.Name.Contains("pushDecision") -or $null -eq $Result.pushDecision) {
+        $reason = "Push decision was not recorded by this older run artifact."
+        Set-ObjectProperty -Object $Result -Name "pushDecision" -Value ([pscustomobject][ordered]@{
+            shouldPush = if ($Result.PSObject.Properties.Name.Contains("pushed")) { [bool]$Result.pushed } else { $false }
+            source = "legacy_result"
+            reason = $reason
+        })
+        Set-ObjectProperty -Object $Result -Name "pushDecisionReason" -Value $reason
+        return
+    }
+
+    $source = if ($Result.pushDecision.PSObject.Properties.Name.Contains("source") -and -not [string]::IsNullOrWhiteSpace($Result.pushDecision.source)) { [string]$Result.pushDecision.source } else { "unknown" }
+    $reason = if ($Result.pushDecision.PSObject.Properties.Name.Contains("reason") -and -not [string]::IsNullOrWhiteSpace($Result.pushDecision.reason)) { [string]$Result.pushDecision.reason } else { "Push decision reason was not recorded." }
+    $shouldPush = if ($Result.pushDecision.PSObject.Properties.Name.Contains("shouldPush")) { [bool]$Result.pushDecision.shouldPush } else { $false }
+    Set-ObjectProperty -Object $Result -Name "pushDecision" -Value ([pscustomobject][ordered]@{
+        shouldPush = $shouldPush
+        source = $source
+        reason = $reason
+    })
+    if (-not $Result.PSObject.Properties.Name.Contains("pushDecisionReason") -or [string]::IsNullOrWhiteSpace($Result.pushDecisionReason)) {
+        Set-ObjectProperty -Object $Result -Name "pushDecisionReason" -Value $reason
+    }
+}
+
 function Set-RunDerivedFields {
     param([object]$Result)
 
@@ -123,6 +153,9 @@ function Set-RunDerivedFields {
     }
     if ($Result.PSObject.Properties.Name.Contains("deliveryStatus")) {
         $validationItems += "deliveryStatus=$($Result.deliveryStatus)"
+    }
+    if ($Result.PSObject.Properties.Name.Contains("pushDecision") -and $null -ne $Result.pushDecision) {
+        $validationItems += "pushDecision=$($Result.pushDecision.source):$($Result.pushDecision.shouldPush)"
     }
     Set-ObjectProperty -Object $Result -Name "validationSummary" -Value $validationItems
 
@@ -219,6 +252,62 @@ function Get-ConfigValue {
     }
 
     return $Object.$Name
+}
+
+function Get-CurrentTaskPushDecision {
+    param(
+        [pscustomobject]$Config,
+        [string]$DispatcherRoot
+    )
+
+    $globalAllowed = [bool]$Config.safety.allowAutoPush
+    $pushControlPath = Join-Path $DispatcherRoot "inbox\codex-task.push.txt"
+    if (-not (Test-Path -LiteralPath $pushControlPath -PathType Leaf)) {
+        if ($globalAllowed) {
+            return [pscustomobject][ordered]@{
+                shouldPush = $true
+                source = "global_default"
+                reason = "Global allowAutoPush=true and no per-task push override was provided."
+            }
+        }
+
+        return [pscustomobject][ordered]@{
+            shouldPush = $false
+            source = "global_default"
+            reason = "Global allowAutoPush=false and no per-task push request was provided."
+        }
+    }
+
+    $pushControl = (Get-Content -LiteralPath $pushControlPath -Raw).Trim().ToLowerInvariant()
+    if ($pushControl -in @("false", "no", "0", "off", "never")) {
+        return [pscustomobject][ordered]@{
+            shouldPush = $false
+            source = "task_opt_out"
+            reason = "Per-task push override explicitly opted out."
+        }
+    }
+
+    if ($pushControl -notin @("true", "yes", "1", "on", "always")) {
+        return [pscustomobject][ordered]@{
+            shouldPush = $false
+            source = "task_override"
+            reason = "Invalid push control value in dispatcher/inbox/codex-task.push.txt. Use true/yes/1/on/always or false/no/0/off/never."
+        }
+    }
+
+    if (-not $globalAllowed) {
+        return [pscustomobject][ordered]@{
+            shouldPush = $false
+            source = "task_opt_in"
+            reason = "Per-task push request was rejected because global allowAutoPush=false."
+        }
+    }
+
+    return [pscustomobject][ordered]@{
+        shouldPush = $true
+        source = "task_opt_in"
+        reason = "Per-task push override explicitly requested push and global allowAutoPush=true."
+    }
 }
 
 function Write-JsonResponse {
@@ -591,6 +680,7 @@ function Normalize-RunResultContract {
         $Result | Add-Member -NotePropertyName "artifacts" -NotePropertyValue ([pscustomobject]$artifacts)
     }
 
+    Normalize-PushDecisionFields -Result $Result
     Normalize-WorkerReportFields -Result $Result
     Set-RunDerivedFields -Result $Result
 
@@ -1132,11 +1222,17 @@ function Invoke-BridgeRequest {
         return
     }
 
+    $globalAutoPushAllowed = [bool]$Config.safety.allowAutoPush
+    $currentTaskPushDecision = Get-CurrentTaskPushDecision -Config $Config -DispatcherRoot $dispatcherRoot
+
     Write-JsonResponse -Response $response -StatusCode 200 -Body ([ordered]@{
         status = "ok"
         dispatcherRoot = $projectRoot
         defaultWorker = [string](Get-ConfigValue -Object $Config -Name "defaultWorker" -DefaultValue "codex")
-        autoPush = [bool]$Config.safety.allowAutoPush
+        autoPush = $globalAutoPushAllowed
+        globalAutoPushAllowed = $globalAutoPushAllowed
+        currentTaskPushDecision = $currentTaskPushDecision
+        currentTaskPushDecisionReason = [string]$currentTaskPushDecision.reason
         bridgeEnabled = $BridgeEnabled
         taskState = $State.TaskState
     })

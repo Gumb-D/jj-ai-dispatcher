@@ -170,7 +170,7 @@ Run a Codex task with a custom commit message:
 .\dispatcher\ask self "update README" -m "docs: update README"
 ```
 
-`ask.ps1` writes the task to the dispatcher inbox, then `dispatcher/run.ps1 codex_task` runs Codex, records run artifacts, owns the Git commit, and handles optional auto-push when explicitly enabled.
+`ask.ps1` writes the task to the dispatcher inbox, then `dispatcher/run.ps1 codex_task` runs Codex, records run artifacts, owns the Git commit, and resolves push behavior from the global safety policy plus the optional per-task push control.
 
 ## Configuration
 
@@ -210,7 +210,15 @@ Never commit real tokens or secrets.
 - expose adapter port `8790` only for approved controlled MCP testing
 - stop tunnels when not actively testing
 - keep exactly the approved MCP tool surface
-- no auto push unless explicitly enabled in config and requested by task
+- no force push
+- Dispatcher push precedence is explicit and backward-compatible:
+  - `safety.allowAutoPush=true` makes successful Dispatcher-owned commits push by default
+  - `dispatcher/inbox/codex-task.push.txt` values `false`, `no`, `0`, `off`, or `never` opt out for one task
+  - `true`, `yes`, `1`, `on`, or `always` remain supported as an explicit per-task push request
+  - when `safety.allowAutoPush=false`, no per-task file means no push, and an explicit per-task push request is rejected safely
+  - no-change tasks never push
+- `dispatcher_status` keeps `autoPush` as a compatibility alias and also reports `globalAutoPushAllowed`, `currentTaskPushDecision`, and `currentTaskPushDecisionReason`
+- run results report `pushed`, `globalAutoPushAllowed`, `pushDecision`, and `pushDecisionReason`
 - no auto delete unless explicitly enabled
 - no system setting modification unless explicitly enabled
 - review persisted run results before issuing the next task

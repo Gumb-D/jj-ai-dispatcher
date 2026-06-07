@@ -121,6 +121,7 @@ export function normalizeRunResult(result) {
   if (!Object.prototype.hasOwnProperty.call(normalized, "artifacts")) {
     normalized.artifacts = buildArtifactPaths(normalized);
   }
+  normalizePushDecisionFields(normalized);
   normalizeWorkerReportFields(normalized);
   normalized.validationSummary = buildValidationSummary(normalized);
   if (!Object.prototype.hasOwnProperty.call(normalized, "errors")) {
@@ -129,6 +130,39 @@ export function normalizeRunResult(result) {
   normalized.recovery = buildRecoveryMessage(normalized);
 
   return normalized;
+}
+
+function normalizePushDecisionFields(result) {
+  const globalAllowed = Object.prototype.hasOwnProperty.call(result, "globalAutoPushAllowed")
+    ? Boolean(result.globalAutoPushAllowed)
+    : false;
+  result.globalAutoPushAllowed = globalAllowed;
+
+  if (!result.pushDecision || typeof result.pushDecision !== "object") {
+    const reason = "Push decision was not recorded by this older run artifact.";
+    result.pushDecision = {
+      shouldPush: Boolean(result.pushed),
+      source: "legacy_result",
+      reason
+    };
+    result.pushDecisionReason = reason;
+    return;
+  }
+
+  const reason = typeof result.pushDecision.reason === "string" && result.pushDecision.reason.trim()
+    ? result.pushDecision.reason.trim()
+    : "Push decision reason was not recorded.";
+  result.pushDecision = {
+    ...result.pushDecision,
+    shouldPush: Boolean(result.pushDecision.shouldPush),
+    source: typeof result.pushDecision.source === "string" && result.pushDecision.source.trim()
+      ? result.pushDecision.source.trim()
+      : "unknown",
+    reason
+  };
+  result.pushDecisionReason = typeof result.pushDecisionReason === "string" && result.pushDecisionReason.trim()
+    ? result.pushDecisionReason.trim()
+    : reason;
 }
 
 function redactResultText(text) {
@@ -209,6 +243,9 @@ function buildValidationSummary(result) {
     items.push(result.workingTreeClean ? "git status --short clean" : "git status --short not clean or unavailable");
   }
   items.push(`deliveryStatus=${result.deliveryStatus}`);
+  if (result.pushDecision && typeof result.pushDecision === "object") {
+    items.push(`pushDecision=${result.pushDecision.source}:${result.pushDecision.shouldPush}`);
+  }
   return items;
 }
 

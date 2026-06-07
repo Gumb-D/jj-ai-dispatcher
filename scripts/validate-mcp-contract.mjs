@@ -91,7 +91,19 @@ async function testToolRegistrationAndSafety() {
   const calls = [];
   const registry = new InProcessToolRegistry();
   registerDispatcherTools(registry, {
-    status: () => ({ status: "ok", bridgeEnabled: true, taskState: "idle", autoPush: false }),
+    status: () => ({
+      status: "ok",
+      bridgeEnabled: true,
+      taskState: "idle",
+      autoPush: false,
+      globalAutoPushAllowed: false,
+      currentTaskPushDecision: {
+        shouldPush: false,
+        source: "global_default",
+        reason: "Global allowAutoPush=false and no per-task push request was provided."
+      },
+      currentTaskPushDecisionReason: "Global allowAutoPush=false and no per-task push request was provided."
+    }),
     dispatch: (payload) => {
       calls.push(payload);
       return { accepted: true, status: "running", worker: "codex", taskState: "running", processId: 123 };
@@ -121,6 +133,13 @@ async function testToolRegistrationAndSafety() {
   assert(calls[0].task.includes("MCP safety fields:"), "dispatch envelope omitted MCP safety fields");
   assert(calls[0].task.includes("- scope:\n  - tests/**"), "dispatch envelope formatting changed");
   assert(calls[0].commitMessage === "test: mcp contract", "commit message was not forwarded separately");
+
+  const status = parseToolResult(await registry.call("dispatcher_status", {}));
+  assert(status.autoPush === false, "dispatcher_status autoPush compatibility alias changed");
+  assert(status.globalAutoPushAllowed === false, "dispatcher_status globalAutoPushAllowed missing");
+  assert(status.currentTaskPushDecision?.shouldPush === false, "dispatcher_status currentTaskPushDecision missing");
+  assert(status.currentTaskPushDecision.source === "global_default", "dispatcher_status currentTaskPushDecision source missing");
+  assert(typeof status.currentTaskPushDecisionReason === "string" && status.currentTaskPushDecisionReason.length > 0, "dispatcher_status currentTaskPushDecisionReason missing");
 }
 
 async function testSafeErrorConversion() {

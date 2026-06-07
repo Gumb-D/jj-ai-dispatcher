@@ -181,6 +181,9 @@ function Set-ResultDerivedFields {
         $validationItems += if ([bool]$ResultContract.workingTreeClean) { "git status --short clean" } else { "git status --short not clean or unavailable" }
     }
     $validationItems += "deliveryStatus=$($ResultContract.deliveryStatus)"
+    if ($ResultContract.PSObject.Properties.Name.Contains("pushDecision") -and $null -ne $ResultContract.pushDecision) {
+        $validationItems += "pushDecision=$($ResultContract.pushDecision.source):$($ResultContract.pushDecision.shouldPush)"
+    }
     Set-ObjectProperty -Object $ResultContract -Name "validationSummary" -Value $validationItems
 
     $detail = if ($ResultContract.PSObject.Properties.Name.Contains("deliveryDetail")) { [string]$ResultContract.deliveryDetail } else { "" }
@@ -270,6 +273,13 @@ function Normalize-WorkerResult {
         commit = $null
         commitMessage = $CommitMessage
         pushed = $false
+        globalAutoPushAllowed = $false
+        pushDecision = [pscustomobject][ordered]@{
+            shouldPush = $false
+            source = "not_evaluated"
+            reason = "Push decision has not been evaluated yet."
+        }
+        pushDecisionReason = "Push decision has not been evaluated yet."
         workingTreeClean = $false
         summary = $summary
         logs = [pscustomobject][ordered]@{
@@ -356,6 +366,12 @@ function Write-RunSummary {
     else {
         "Truncated: False; Persisted Length: 0; Original Length: 0; Max Length: $WorkerReportMaxLength; Redacted: True"
     }
+    $pushDecision = if ($ResultContract.PSObject.Properties.Name.Contains("pushDecision") -and $null -ne $ResultContract.pushDecision) {
+        "Should Push: $($ResultContract.pushDecision.shouldPush); Source: $($ResultContract.pushDecision.source); Reason: $($ResultContract.pushDecision.reason)"
+    }
+    else {
+        "Should Push: False; Source: legacy_result; Reason: Push decision was not recorded."
+    }
 
     $content = @"
 # Dispatcher Run Summary
@@ -395,6 +411,12 @@ $files
 ## Commit
 
 $commit
+Pushed: $($ResultContract.pushed)
+Global Auto Push Allowed: $($ResultContract.globalAutoPushAllowed)
+
+## Push Decision
+
+$pushDecision
 
 ## Validation
 
@@ -468,6 +490,107 @@ function Invoke-LoggedCommand {
     }
     finally {
         Remove-Item $stdoutFile, $stderrFile -ErrorAction SilentlyContinue
+    }
+}
+
+function Set-PushDecisionFields {
+    param(
+        [object]$ResultContract,
+        [object]$Decision
+    )
+
+    Set-ObjectProperty -Object $ResultContract -Name "globalAutoPushAllowed" -Value ([bool]$Decision.globalAutoPushAllowed)
+    Set-ObjectProperty -Object $ResultContract -Name "pushDecision" -Value ([pscustomobject][ordered]@{
+        shouldPush = [bool]$Decision.shouldPush
+        source = [string]$Decision.source
+        reason = [string]$Decision.reason
+    })
+    Set-ObjectProperty -Object $ResultContract -Name "pushDecisionReason" -Value ([string]$Decision.reason)
+}
+
+function Resolve-CodexTaskPushDecision {
+    param(
+        [pscustomobject]$Config,
+        [string]$DispatcherRoot,
+        [switch]$NoChanges
+    )
+
+    $globalAllowed = [bool]$Config.safety.allowAutoPush
+    if ($NoChanges) {
+        return [pscustomobject][ordered]@{
+            shouldPush = $false
+            source = "no_changes"
+            reason = "No Dispatcher-owned commit was created, so push was skipped."
+            globalAutoPushAllowed = $globalAllowed
+            invalid = $false
+            rejected = $false
+        }
+    }
+
+    $pushControlPath = Join-Path $DispatcherRoot "inbox\codex-task.push.txt"
+    if (-not (Test-Path -LiteralPath $pushControlPath -PathType Leaf)) {
+        if ($globalAllowed) {
+            return [pscustomobject][ordered]@{
+                shouldPush = $true
+                source = "global_default"
+                reason = "Global allowAutoPush=true and no per-task push override was provided."
+                globalAutoPushAllowed = $true
+                invalid = $false
+                rejected = $false
+            }
+        }
+
+        return [pscustomobject][ordered]@{
+            shouldPush = $false
+            source = "global_default"
+            reason = "Global allowAutoPush=false and no per-task push request was provided."
+            globalAutoPushAllowed = $false
+            invalid = $false
+            rejected = $false
+        }
+    }
+
+    $pushControl = (Get-Content -LiteralPath $pushControlPath -Raw).Trim().ToLowerInvariant()
+    if ($pushControl -in @("false", "no", "0", "off", "never")) {
+        return [pscustomobject][ordered]@{
+            shouldPush = $false
+            source = "task_opt_out"
+            reason = "Per-task push override explicitly opted out."
+            globalAutoPushAllowed = $globalAllowed
+            invalid = $false
+            rejected = $false
+        }
+    }
+
+    if ($pushControl -notin @("true", "yes", "1", "on", "always")) {
+        return [pscustomobject][ordered]@{
+            shouldPush = $false
+            source = "task_override"
+            reason = "Invalid push control value in dispatcher/inbox/codex-task.push.txt. Use true/yes/1/on/always or false/no/0/off/never."
+            globalAutoPushAllowed = $globalAllowed
+            invalid = $true
+            rejected = $false
+        }
+    }
+
+    if (-not $globalAllowed) {
+        return [pscustomobject][ordered]@{
+            shouldPush = $false
+            source = "task_opt_in"
+            reason = "Per-task push request was rejected because global allowAutoPush=false."
+            globalAutoPushAllowed = $false
+            invalid = $false
+            rejected = $true
+        }
+    }
+
+    return [pscustomobject][ordered]@{
+        shouldPush = $true
+        source = "task_opt_in"
+        reason = "Per-task push override explicitly requested push and global allowAutoPush=true."
+        globalAutoPushAllowed = $true
+        invalid = $false
+        rejected = $false
     }
 }
 
@@ -781,6 +904,8 @@ function Invoke-CodexTaskGitCommit {
     if ([string]::IsNullOrWhiteSpace($statusResult.Stdout)) {
         Write-Step "No changes detected."
         Add-ResultOutput -Result $Result -Stdout "[dispatcher] No changes detected."
+        $pushDecision = Resolve-CodexTaskPushDecision -Config $Config -DispatcherRoot $DispatcherRoot -NoChanges
+        Set-PushDecisionFields -ResultContract $ResultContract -Decision $pushDecision
         $ResultContract.workingTreeClean = $true
         if ($ResultContract.PSObject.Properties.Name.Contains("workerSummary") -and -not [string]::IsNullOrWhiteSpace($ResultContract.workerSummary)) {
             $ResultContract.summary = "Codex worker completed successfully. No changes detected. Worker summary: $($ResultContract.workerSummary)"
@@ -857,39 +982,42 @@ function Invoke-CodexTaskGitCommit {
     Write-Step "Git commit complete."
     Add-ResultOutput -Result $Result -Stdout "[dispatcher] Git commit complete."
 
-    $pushControlPath = Join-Path $DispatcherRoot "inbox\codex-task.push.txt"
-    if (-not (Test-Path -LiteralPath $pushControlPath -PathType Leaf)) {
-        return
-    }
+    $pushDecision = Resolve-CodexTaskPushDecision -Config $Config -DispatcherRoot $DispatcherRoot
+    Set-PushDecisionFields -ResultContract $ResultContract -Decision $pushDecision
+    Add-ResultOutput -Result $Result -Stdout "[dispatcher] Push decision: shouldPush=$($pushDecision.shouldPush); source=$($pushDecision.source); reason=$($pushDecision.reason)"
 
-    $pushControl = (Get-Content -LiteralPath $pushControlPath -Raw).Trim().ToLowerInvariant()
-    if ($pushControl -notin @("true", "yes", "1")) {
+    if ($pushDecision.invalid) {
         $Result.ExitCode = 1
-        $message = "Invalid auto push control value in dispatcher/inbox/codex-task.push.txt. Use true, yes, or 1."
+        $Result.Phase = "Git push decision"
         $ResultContract.status = "failed"
         $ResultContract.needsReview = $true
-        $ResultContract.reviewHints = @($message)
-        Add-ResultOutput -Result $Result -Stdout "[dispatcher] $message" -Stderr $message
+        $ResultContract.reviewHints = @($pushDecision.reason)
+        Add-ResultOutput -Result $Result -Stdout "[dispatcher] $($pushDecision.reason)" -Stderr $pushDecision.reason
         return
     }
 
-    Write-Step "Auto push enabled."
-    Add-ResultOutput -Result $Result -Stdout "[dispatcher] Auto push enabled."
-
-    if (-not $Config.safety.allowAutoPush) {
+    if ($pushDecision.rejected) {
         $Result.ExitCode = 1
-        $message = "Auto push disabled by config."
+        $Result.Phase = "Git push policy"
         $ResultContract.status = "failed"
         $ResultContract.needsReview = $true
-        $ResultContract.reviewHints = @($message)
-        Add-ResultOutput -Result $Result -Stdout "[dispatcher] $message" -Stderr $message
+        $ResultContract.reviewHints = @($pushDecision.reason)
+        Add-ResultOutput -Result $Result -Stdout "[dispatcher] $($pushDecision.reason)" -Stderr $pushDecision.reason
         return
     }
+
+    if (-not $pushDecision.shouldPush) {
+        return
+    }
+
+    Write-Step "Git push enabled."
+    Add-ResultOutput -Result $Result -Stdout "[dispatcher] Git push enabled."
 
     $pushResult = Invoke-LoggedCommand -FilePath $Config.gitExe -ArgumentList @("push") -WorkingDirectory $RepoPath -LogFile $LogFile
     Add-ResultOutput -Result $Result -Stdout $pushResult.Stdout -Stderr $pushResult.Stderr
     if ($pushResult.ExitCode -ne 0) {
         $Result.ExitCode = $pushResult.ExitCode
+        $Result.Phase = "Git push"
         $ResultContract.status = "failed"
         $ResultContract.needsReview = $true
         $ResultContract.reviewHints = @("Git push failed.")

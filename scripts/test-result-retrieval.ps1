@@ -97,6 +97,7 @@ if ($errors.Count -gt 0) {
     "Set-ObjectProperty",
     "Redact-ResultText",
     "Normalize-WorkerReportFields",
+    "Normalize-PushDecisionFields",
     "Set-RunDerivedFields",
     "Get-DeliveryRecoveryMessage",
     "Test-TaskId",
