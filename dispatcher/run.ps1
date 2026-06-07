@@ -60,6 +60,133 @@ function ConvertTo-DispatcherRelativePath {
     return $relative.Replace("\", "/")
 }
 
+$WorkerReportMaxLength = 12000
+
+function Set-ObjectProperty {
+    param(
+        [object]$Object,
+        [string]$Name,
+        [object]$Value
+    )
+
+    if ($Object.PSObject.Properties.Name.Contains($Name)) {
+        $Object.$Name = $Value
+    }
+    else {
+        $Object | Add-Member -NotePropertyName $Name -NotePropertyValue $Value
+    }
+}
+
+function Redact-ResultText {
+    param([string]$Text)
+
+    if ([string]::IsNullOrWhiteSpace($Text)) {
+        return ""
+    }
+
+    $redacted = $Text
+    $redacted = [regex]::Replace($redacted, "(?i)(x-dispatcher-token\s*[:=]\s*)[^\s""',;]+", '$1[REDACTED]')
+    $redacted = [regex]::Replace($redacted, "(?i)\b(bearer\s+)[A-Za-z0-9._~+/\-]+=*", '$1[REDACTED]')
+    $redacted = [regex]::Replace($redacted, "(?i)\b(sk-[A-Za-z0-9_\-]{20,})\b", '[REDACTED]')
+    $redacted = [regex]::Replace($redacted, "(?i)\b(api[_-]?key|token|secret|password|authorization)\s*[:=]\s*[""']?[^""'\s,;]+", '$1=[REDACTED]')
+    return $redacted
+}
+
+function New-WorkerReportContract {
+    param(
+        [hashtable]$Result,
+        [int]$MaxLength = $WorkerReportMaxLength
+    )
+
+    $report = [string]$Result.Stdout
+    if ($Result.ExitCode -ne 0 -and -not [string]::IsNullOrWhiteSpace([string]$Result.Stderr)) {
+        $report = Join-ResultText -Existing $report -Addition ([string]$Result.Stderr)
+    }
+    elseif ([string]::IsNullOrWhiteSpace($report)) {
+        $report = [string]$Result.Stderr
+    }
+
+    $report = (Redact-ResultText -Text $report).Trim()
+    $originalLength = $report.Length
+    $truncated = $false
+    if ($originalLength -gt $MaxLength) {
+        $report = $report.Substring(0, $MaxLength).TrimEnd()
+        $truncated = $true
+    }
+
+    $summary = ""
+    if (-not [string]::IsNullOrWhiteSpace($report)) {
+        $summaryLines = @($report -split "`r?`n" | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
+        if ($summaryLines.Count -gt 0) {
+            $summary = [string]$summaryLines[0]
+            if ($summary.Length -gt 1000) {
+                $summary = $summary.Substring(0, 1000).TrimEnd()
+            }
+        }
+    }
+
+    return [pscustomobject][ordered]@{
+        summary = $summary
+        report = $report
+        metadata = [pscustomobject][ordered]@{
+            maxLength = $MaxLength
+            originalLength = $originalLength
+            persistedLength = $report.Length
+            truncated = $truncated
+            redacted = $true
+        }
+    }
+}
+
+function Set-WorkerReportFields {
+    param(
+        [object]$ResultContract,
+        [hashtable]$WorkerResult
+    )
+
+    $workerReport = New-WorkerReportContract -Result $WorkerResult
+    Set-ObjectProperty -Object $ResultContract -Name "workerSummary" -Value $workerReport.summary
+    Set-ObjectProperty -Object $ResultContract -Name "workerReport" -Value $workerReport.report
+    Set-ObjectProperty -Object $ResultContract -Name "workerReportMetadata" -Value $workerReport.metadata
+    Set-ObjectProperty -Object $ResultContract -Name "workerReportTruncated" -Value $workerReport.metadata.truncated
+}
+
+function Get-DeliveryRecoveryMessage {
+    param(
+        [string]$DeliveryStatus,
+        [string]$Detail = ""
+    )
+
+    switch ($DeliveryStatus) {
+        "delivered" { return "Browser postback delivered. Persistent result remains available through dispatcher_latest_result and dispatcher_get_run." }
+        "pending" { return "Browser postback pending. If browser delivery does not complete, retrieve the persisted result through dispatcher_latest_result or dispatcher_get_run." }
+        "timeout" { return "Browser postback timed out. Execution result remains authoritative through dispatcher_latest_result and dispatcher_get_run." }
+        "failed" {
+            if ([string]::IsNullOrWhiteSpace($Detail)) {
+                return "Browser postback failed. Execution result remains authoritative through dispatcher_latest_result and dispatcher_get_run."
+            }
+            return "Browser postback failed: $Detail. Execution result remains authoritative through dispatcher_latest_result and dispatcher_get_run."
+        }
+        "skipped" { return "Browser postback skipped. Persistent result is available through dispatcher_latest_result and dispatcher_get_run." }
+        "unavailable" { return "Browser postback unavailable. Persistent result is available through dispatcher_latest_result and dispatcher_get_run." }
+        default { return "No browser postback was requested. Persistent result is available through dispatcher_latest_result and dispatcher_get_run." }
+    }
+}
+
+function Set-ResultDerivedFields {
+    param([object]$ResultContract)
+
+    $validationItems = @()
+    if ($ResultContract.PSObject.Properties.Name.Contains("workingTreeClean")) {
+        $validationItems += if ([bool]$ResultContract.workingTreeClean) { "git status --short clean" } else { "git status --short not clean or unavailable" }
+    }
+    $validationItems += "deliveryStatus=$($ResultContract.deliveryStatus)"
+    Set-ObjectProperty -Object $ResultContract -Name "validationSummary" -Value $validationItems
+
+    $detail = if ($ResultContract.PSObject.Properties.Name.Contains("deliveryDetail")) { [string]$ResultContract.deliveryDetail } else { "" }
+    Set-ObjectProperty -Object $ResultContract -Name "recovery" -Value (Get-DeliveryRecoveryMessage -DeliveryStatus $ResultContract.deliveryStatus -Detail $detail)
+}
+
 function Write-JsonFile {
     param(
         [string]$Path,
@@ -191,7 +318,10 @@ function Write-RunSummary {
         "$($ResultContract.commit) $($ResultContract.commitMessage)"
     }
 
-    $validation = if ($ResultContract.workingTreeClean) {
+    $validation = if ($ResultContract.PSObject.Properties.Name.Contains("validationSummary") -and $null -ne $ResultContract.validationSummary) {
+        (@($ResultContract.validationSummary) | ForEach-Object { "- $_" }) -join [Environment]::NewLine
+    }
+    elseif ($ResultContract.workingTreeClean) {
         "- git status --short clean"
     }
     else {
@@ -212,14 +342,19 @@ function Write-RunSummary {
         $ResultContract.deliveryChannel
     }
 
-    $recovery = switch ($ResultContract.deliveryStatus) {
-        "delivered" { "Browser postback delivered. Persistent result remains available through dispatcher_latest_result and dispatcher_get_run." }
-        "pending" { "Browser postback pending. If browser delivery does not complete, retrieve the persisted result through dispatcher_latest_result or dispatcher_get_run." }
-        "timeout" { "Browser postback timed out. Execution result remains authoritative through dispatcher_latest_result and dispatcher_get_run." }
-        "failed" { "Browser postback failed. Execution result remains authoritative through dispatcher_latest_result and dispatcher_get_run." }
-        "skipped" { "Browser postback skipped. Persistent result is available through dispatcher_latest_result and dispatcher_get_run." }
-        "unavailable" { "Browser postback unavailable. Persistent result is available through dispatcher_latest_result and dispatcher_get_run." }
-        default { "No browser postback was requested. Persistent result is available through dispatcher_latest_result and dispatcher_get_run." }
+    $detail = if ($ResultContract.PSObject.Properties.Name.Contains("deliveryDetail")) { [string]$ResultContract.deliveryDetail } else { "" }
+    $recovery = Get-DeliveryRecoveryMessage -DeliveryStatus $ResultContract.deliveryStatus -Detail $detail
+    $workerReport = if ($ResultContract.PSObject.Properties.Name.Contains("workerReport") -and -not [string]::IsNullOrWhiteSpace($ResultContract.workerReport)) {
+        [string]$ResultContract.workerReport
+    }
+    else {
+        "No worker report captured."
+    }
+    $workerMetadata = if ($ResultContract.PSObject.Properties.Name.Contains("workerReportMetadata") -and $null -ne $ResultContract.workerReportMetadata) {
+        "Truncated: $($ResultContract.workerReportMetadata.truncated); Persisted Length: $($ResultContract.workerReportMetadata.persistedLength); Original Length: $($ResultContract.workerReportMetadata.originalLength); Max Length: $($ResultContract.workerReportMetadata.maxLength); Redacted: $($ResultContract.workerReportMetadata.redacted)"
+    }
+    else {
+        "Truncated: False; Persisted Length: 0; Original Length: 0; Max Length: $WorkerReportMaxLength; Redacted: True"
     }
 
     $content = @"
@@ -269,6 +404,14 @@ $validation
 
 Summary: $($ResultContract.summary)
 Needs review: $($ResultContract.needsReview)
+
+## Worker Report
+
+$workerReport
+
+## Worker Report Metadata
+
+$workerMetadata
 
 ## Review Hints
 
@@ -639,7 +782,12 @@ function Invoke-CodexTaskGitCommit {
         Write-Step "No changes detected."
         Add-ResultOutput -Result $Result -Stdout "[dispatcher] No changes detected."
         $ResultContract.workingTreeClean = $true
-        $ResultContract.summary = "Codex worker completed successfully. No changes detected."
+        if ($ResultContract.PSObject.Properties.Name.Contains("workerSummary") -and -not [string]::IsNullOrWhiteSpace($ResultContract.workerSummary)) {
+            $ResultContract.summary = "Codex worker completed successfully. No changes detected. Worker summary: $($ResultContract.workerSummary)"
+        }
+        else {
+            $ResultContract.summary = "Codex worker completed successfully. No changes detected."
+        }
         return
     }
 
@@ -961,6 +1109,7 @@ exit `$LASTEXITCODE
             -StdoutPath $runContext.StdoutLog `
             -StderrPath $runContext.StderrLog `
             -DiffPath $runContext.DiffPatch
+        Set-WorkerReportFields -ResultContract $resultContract -WorkerResult $result
 
         if ($result.ExitCode -eq 0) {
             Invoke-CodexTaskGitCommit `
@@ -1032,6 +1181,7 @@ if ($runContext) {
             -StdoutPath $runContext.StdoutLog `
             -StderrPath $runContext.StderrLog `
             -DiffPath $runContext.DiffPatch
+        Set-WorkerReportFields -ResultContract $resultContract -WorkerResult $result
     }
 
     if ($result.ExitCode -ne 0) {
@@ -1082,6 +1232,7 @@ if ($runContext) {
         $resultContract.deliveryChannel = $null
     }
     $resultContract.deliveryRequired = $false
+    Set-ResultDerivedFields -ResultContract $resultContract
 
     $taskContract.status = $resultContract.status
     $taskContract.executionStatus = $resultContract.executionStatus
@@ -1130,18 +1281,9 @@ if ($runContext) {
             }
 
             $resultContract.deliveryStatus = $postbackDeliveryStatus
-            if (-not $resultContract.PSObject.Properties.Name.Contains("deliveryUpdatedAt")) {
-                $resultContract | Add-Member -NotePropertyName "deliveryUpdatedAt" -NotePropertyValue (Get-Date).ToString("o")
-            }
-            else {
-                $resultContract.deliveryUpdatedAt = (Get-Date).ToString("o")
-            }
-            if (-not $resultContract.PSObject.Properties.Name.Contains("deliveryDetail")) {
-                $resultContract | Add-Member -NotePropertyName "deliveryDetail" -NotePropertyValue $postbackError
-            }
-            else {
-                $resultContract.deliveryDetail = $postbackError
-            }
+            Set-ObjectProperty -Object $resultContract -Name "deliveryUpdatedAt" -Value (Get-Date).ToString("o")
+            Set-ObjectProperty -Object $resultContract -Name "deliveryDetail" -Value $postbackError
+            Set-ResultDerivedFields -ResultContract $resultContract
             Write-Step "Postback trigger warning. Execution=$($resultContract.executionStatus); Delivery=$($resultContract.deliveryStatus); Recovery=dispatcher_latest_result or dispatcher_get_run remains available. Detail: $postbackError"
             Write-JsonFile -Path $runContext.ResultJson -Value $resultContract
             Write-RunSummary -RunContext $runContext -ResultContract $resultContract -TaskText $taskText

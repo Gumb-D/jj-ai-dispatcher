@@ -9,6 +9,10 @@ $checks = @(
         Path = Join-Path $scriptRoot "test-delivery-state.ps1"
     },
     @{
+        Name = "worker-report"
+        Path = Join-Path $scriptRoot "test-worker-report.ps1"
+    },
+    @{
         Name = "result-retrieval"
         Path = Join-Path $scriptRoot "test-result-retrieval.ps1"
     },

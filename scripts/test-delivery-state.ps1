@@ -56,6 +56,21 @@ function New-TestRunArtifact {
             stderr = $null
             diff = $null
         }
+        validationSummary = @(
+            "git status --short clean",
+            "deliveryStatus=pending"
+        )
+        recovery = "Browser postback pending. If browser delivery does not complete, retrieve the persisted result through dispatcher_latest_result or dispatcher_get_run."
+        workerSummary = "Delivery state worker report."
+        workerReport = "Delivery state worker report."
+        workerReportMetadata = [ordered]@{
+            maxLength = 12000
+            originalLength = 29
+            persistedLength = 29
+            truncated = $false
+            redacted = $true
+        }
+        workerReportTruncated = $false
         needsReview = $false
         reviewHints = @()
     }
@@ -83,6 +98,11 @@ Status: pending
 Channel: browser_postback
 Required: False
 
+## Validation
+
+- git status --short clean
+- deliveryStatus=pending
+
 ## Recovery
 
 Browser postback pending. If browser delivery does not complete, retrieve the persisted result through dispatcher_latest_result or dispatcher_get_run.
@@ -108,9 +128,15 @@ function Assert-RunDelivery {
     if ($result.executionStatus -ne $ExecutionStatus) { throw "$TaskId executionStatus changed to $($result.executionStatus)." }
     if ($result.deliveryStatus -ne $DeliveryStatus) { throw "$TaskId deliveryStatus expected $DeliveryStatus but was $($result.deliveryStatus)." }
     if ($result.deliveryRequired -ne $false) { throw "$TaskId deliveryRequired expected false but was $($result.deliveryRequired)." }
+    if (-not (@($result.validationSummary) -contains "deliveryStatus=$DeliveryStatus")) { throw "$TaskId validationSummary was not refreshed." }
+    if ($DeliveryStatus -ne "pending" -and (@($result.validationSummary) -contains "deliveryStatus=pending")) { throw "$TaskId validationSummary retained stale pending state." }
+    if ($DeliveryStatus -eq "delivered" -and $result.recovery -notmatch "Browser postback delivered") { throw "$TaskId recovery text was not refreshed to delivered." }
     if ($summary -notmatch "Execution Status: $ExecutionStatus") { throw "$TaskId summary missing execution status." }
     if ($summary -notmatch "Delivery Status: $DeliveryStatus") { throw "$TaskId summary missing delivery status." }
     if ($summary -notmatch "(?ms)## Delivery\s+Status: $DeliveryStatus") { throw "$TaskId delivery section missing terminal delivery status." }
+    if ($summary -notmatch "deliveryStatus=$DeliveryStatus") { throw "$TaskId summary validation block was not refreshed." }
+    if ($DeliveryStatus -ne "pending" -and $summary -match "deliveryStatus=pending") { throw "$TaskId summary retained stale pending validation." }
+    if ($DeliveryStatus -eq "delivered" -and $summary -notmatch "Browser postback delivered") { throw "$TaskId summary recovery was not refreshed to delivered." }
     if ($summary -notmatch "## Recovery") { throw "$TaskId summary missing recovery section." }
 }
 
@@ -144,6 +170,10 @@ if ($errors.Count -gt 0) {
 @(
     "Write-BridgeStep",
     "Write-JsonFile",
+    "Set-ObjectProperty",
+    "Redact-ResultText",
+    "Normalize-WorkerReportFields",
+    "Set-RunDerivedFields",
     "Get-DeliveryRecoveryMessage",
     "Test-TaskId",
     "Get-RunsRoot",

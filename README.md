@@ -136,6 +136,8 @@ dispatcher/runs/<task-id>/result.json
 
 In run results, `status` is retained for compatibility and represents execution outcome only. Newer results also expose `executionStatus`, `deliveryStatus`, `deliveryChannel`, and `deliveryRequired`; older successful results without delivery fields are read as `deliveryStatus: "not_requested"`.
 
+Read-only and no-change runs persist the worker's final report directly in the result contract as `workerSummary`, `workerReport`, `workerReportMetadata`, and `workerReportTruncated`. The report is redacted for token-like content and bounded before persistence; full raw logs remain artifact references, not MCP file-read endpoints. `summary.md` includes the persisted worker report so substantive no-change conclusions remain recoverable through `dispatcher_latest_result` and `dispatcher_get_run`.
+
 Browser postback delivery is optional and may move through `pending`, `delivered`, `timeout`, `failed`, `skipped`, or `unavailable`. These delivery updates are persisted to `result.json` and reflected by `dispatcher_latest_result` and `dispatcher_get_run`, but they never change top-level `status` or `executionStatus`. A successful execution with a postback timeout remains `status: "success"` and `executionStatus: "success"` with `deliveryStatus: "timeout"`.
 
 `dispatcher_latest_result` returns the newest completed persisted run for this dispatcher repository. It ignores interrupted `queued` or `running` artifacts, malformed task/result mismatches, and completed lifecycle-test artifacts whose `repo` points at unrelated temporary repositories. Direct `dispatcher_get_run` lookup still uses the exact task ID and returns that run only.

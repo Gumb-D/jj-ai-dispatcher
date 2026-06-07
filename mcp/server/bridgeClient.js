@@ -93,6 +93,7 @@ function sanitizeBridgeMessage(message) {
 
 const EXECUTION_STATUSES = new Set(["queued", "running", "success", "failed", "cancelled"]);
 const DELIVERY_STATUSES = new Set(["not_requested", "pending", "delivered", "timeout", "failed", "skipped", "unavailable"]);
+const WORKER_REPORT_MAX_LENGTH = 12000;
 
 export function normalizeRunResult(result) {
   if (!result || typeof result !== "object" || typeof result.taskId !== "string") {
@@ -120,17 +121,62 @@ export function normalizeRunResult(result) {
   if (!Object.prototype.hasOwnProperty.call(normalized, "artifacts")) {
     normalized.artifacts = buildArtifactPaths(normalized);
   }
-  if (!Object.prototype.hasOwnProperty.call(normalized, "validationSummary")) {
-    normalized.validationSummary = buildValidationSummary(normalized);
-  }
+  normalizeWorkerReportFields(normalized);
+  normalized.validationSummary = buildValidationSummary(normalized);
   if (!Object.prototype.hasOwnProperty.call(normalized, "errors")) {
     normalized.errors = buildErrors(normalized);
   }
-  if (!Object.prototype.hasOwnProperty.call(normalized, "recovery")) {
-    normalized.recovery = buildRecoveryMessage(normalized);
-  }
+  normalized.recovery = buildRecoveryMessage(normalized);
 
   return normalized;
+}
+
+function redactResultText(text) {
+  if (typeof text !== "string" || !text.trim()) {
+    return "";
+  }
+
+  return text
+    .replace(/(x-dispatcher-token\s*[:=]\s*)[^\s"',;]+/gi, "$1[REDACTED]")
+    .replace(/\b(bearer\s+)[A-Za-z0-9._~+/-]+=*/gi, "$1[REDACTED]")
+    .replace(/\bsk-[A-Za-z0-9_-]{20,}\b/gi, "[REDACTED]")
+    .replace(/\b(api[_-]?key|token|secret|password|authorization)\s*[:=]\s*["']?[^"'\s,;]+/gi, "$1=[REDACTED]");
+}
+
+function normalizeWorkerReportFields(result) {
+  let report = "";
+  if (typeof result.workerReport === "string" && result.workerReport.trim()) {
+    report = result.workerReport;
+  } else if (typeof result.workerSummary === "string" && result.workerSummary.trim()) {
+    report = result.workerSummary;
+  }
+
+  report = redactResultText(report).trim();
+  const originalLength = report.length;
+  let truncated = false;
+  if (report.length > WORKER_REPORT_MAX_LENGTH) {
+    report = report.slice(0, WORKER_REPORT_MAX_LENGTH).trimEnd();
+    truncated = true;
+  }
+
+  let summary = typeof result.workerSummary === "string" ? redactResultText(result.workerSummary).trim() : "";
+  if (!summary && report) {
+    summary = report.split(/\r?\n/).find((line) => line.trim())?.trim() || "";
+  }
+  if (summary.length > 1000) {
+    summary = summary.slice(0, 1000).trimEnd();
+  }
+
+  result.workerSummary = summary;
+  result.workerReport = report;
+  result.workerReportMetadata = {
+    maxLength: WORKER_REPORT_MAX_LENGTH,
+    originalLength,
+    persistedLength: report.length,
+    truncated,
+    redacted: true
+  };
+  result.workerReportTruncated = truncated;
 }
 
 function buildArtifactPaths(result) {
@@ -192,6 +238,9 @@ function buildRecoveryMessage(result) {
     return "Browser postback timed out. Execution result remains authoritative through dispatcher_latest_result and dispatcher_get_run.";
   }
   if (result.deliveryStatus === "failed") {
+    if (typeof result.deliveryDetail === "string" && result.deliveryDetail.trim()) {
+      return `Browser postback failed: ${result.deliveryDetail.trim()}. Execution result remains authoritative through dispatcher_latest_result and dispatcher_get_run.`;
+    }
     return "Browser postback failed. Execution result remains authoritative through dispatcher_latest_result and dispatcher_get_run.";
   }
   if (result.deliveryStatus === "skipped") {

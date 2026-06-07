@@ -94,6 +94,10 @@ if ($errors.Count -gt 0) {
 @(
     "Write-BridgeStep",
     "Write-JsonFile",
+    "Set-ObjectProperty",
+    "Redact-ResultText",
+    "Normalize-WorkerReportFields",
+    "Set-RunDerivedFields",
     "Get-DeliveryRecoveryMessage",
     "Test-TaskId",
     "Get-RunsRoot",

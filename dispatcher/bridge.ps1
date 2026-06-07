@@ -35,6 +35,101 @@ function Write-JsonFile {
     Set-Content -LiteralPath $Path -Value $json -Encoding UTF8
 }
 
+$WorkerReportMaxLength = 12000
+
+function Set-ObjectProperty {
+    param(
+        [object]$Object,
+        [string]$Name,
+        [object]$Value
+    )
+
+    if ($Object.PSObject.Properties.Name.Contains($Name)) {
+        $Object.$Name = $Value
+    }
+    else {
+        $Object | Add-Member -NotePropertyName $Name -NotePropertyValue $Value
+    }
+}
+
+function Redact-ResultText {
+    param([string]$Text)
+
+    if ([string]::IsNullOrWhiteSpace($Text)) {
+        return ""
+    }
+
+    $redacted = $Text
+    $redacted = [regex]::Replace($redacted, "(?i)(x-dispatcher-token\s*[:=]\s*)[^\s""',;]+", '$1[REDACTED]')
+    $redacted = [regex]::Replace($redacted, "(?i)\b(bearer\s+)[A-Za-z0-9._~+/\-]+=*", '$1[REDACTED]')
+    $redacted = [regex]::Replace($redacted, "(?i)\b(sk-[A-Za-z0-9_\-]{20,})\b", '[REDACTED]')
+    $redacted = [regex]::Replace($redacted, "(?i)\b(api[_-]?key|token|secret|password|authorization)\s*[:=]\s*[""']?[^""'\s,;]+", '$1=[REDACTED]')
+    return $redacted
+}
+
+function Normalize-WorkerReportFields {
+    param([object]$Result)
+
+    $report = ""
+    if ($Result.PSObject.Properties.Name.Contains("workerReport") -and -not [string]::IsNullOrWhiteSpace($Result.workerReport)) {
+        $report = [string]$Result.workerReport
+    }
+    elseif ($Result.PSObject.Properties.Name.Contains("workerSummary") -and -not [string]::IsNullOrWhiteSpace($Result.workerSummary)) {
+        $report = [string]$Result.workerSummary
+    }
+
+    $report = (Redact-ResultText -Text $report).Trim()
+    $originalLength = $report.Length
+    $truncated = $false
+    if ($originalLength -gt $WorkerReportMaxLength) {
+        $report = $report.Substring(0, $WorkerReportMaxLength).TrimEnd()
+        $truncated = $true
+    }
+
+    $summary = ""
+    if ($Result.PSObject.Properties.Name.Contains("workerSummary") -and -not [string]::IsNullOrWhiteSpace($Result.workerSummary)) {
+        $summary = (Redact-ResultText -Text ([string]$Result.workerSummary)).Trim()
+    }
+    elseif (-not [string]::IsNullOrWhiteSpace($report)) {
+        $summaryLines = @($report -split "`r?`n" | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
+        if ($summaryLines.Count -gt 0) {
+            $summary = [string]$summaryLines[0]
+        }
+    }
+    if ($summary.Length -gt 1000) {
+        $summary = $summary.Substring(0, 1000).TrimEnd()
+    }
+
+    $metadata = [pscustomobject][ordered]@{
+        maxLength = $WorkerReportMaxLength
+        originalLength = $originalLength
+        persistedLength = $report.Length
+        truncated = $truncated
+        redacted = $true
+    }
+
+    Set-ObjectProperty -Object $Result -Name "workerSummary" -Value $summary
+    Set-ObjectProperty -Object $Result -Name "workerReport" -Value $report
+    Set-ObjectProperty -Object $Result -Name "workerReportMetadata" -Value $metadata
+    Set-ObjectProperty -Object $Result -Name "workerReportTruncated" -Value $truncated
+}
+
+function Set-RunDerivedFields {
+    param([object]$Result)
+
+    $validationItems = @()
+    if ($Result.PSObject.Properties.Name.Contains("workingTreeClean")) {
+        $validationItems += if ([bool]$Result.workingTreeClean) { "git status --short clean" } else { "git status --short not clean or unavailable" }
+    }
+    if ($Result.PSObject.Properties.Name.Contains("deliveryStatus")) {
+        $validationItems += "deliveryStatus=$($Result.deliveryStatus)"
+    }
+    Set-ObjectProperty -Object $Result -Name "validationSummary" -Value $validationItems
+
+    $detail = if ($Result.PSObject.Properties.Name.Contains("deliveryDetail")) { [string]$Result.deliveryDetail } else { "" }
+    Set-ObjectProperty -Object $Result -Name "recovery" -Value (Get-DeliveryRecoveryMessage -DeliveryStatus $Result.deliveryStatus -Detail $detail)
+}
+
 function Get-DeliveryRecoveryMessage {
     param(
         [string]$DeliveryStatus,
@@ -86,13 +181,27 @@ function Update-RunSummaryDelivery {
         }
     )
 
-    $recoveryMessage = Get-DeliveryRecoveryMessage -DeliveryStatus $DeliveryStatus -Detail $Detail
+    $validation = if ($Result.PSObject.Properties.Name.Contains("validationSummary") -and $null -ne $Result.validationSummary) {
+        (@($Result.validationSummary) | ForEach-Object { "- $_" }) -join "`r`n"
+    }
+    else {
+        "- No validation summary recorded."
+    }
+    $recoveryMessage = if ($Result.PSObject.Properties.Name.Contains("recovery")) { [string]$Result.recovery } else { Get-DeliveryRecoveryMessage -DeliveryStatus $DeliveryStatus -Detail $Detail }
     $recoveryBlock = "## Recovery`r`n`r`n$recoveryMessage"
     if ($content -match "(?ms)^## Recovery\r?\n\r?\n.*?(?=^## |\z)") {
         $content = [regex]::Replace($content, "(?ms)^## Recovery\r?\n\r?\n.*?(?=^## |\z)", $recoveryBlock)
     }
     else {
         $content = $content.TrimEnd() + "`r`n`r`n" + $recoveryBlock + "`r`n"
+    }
+
+    $validationBlock = "## Validation`r`n`r`n$validation"
+    if ($content -match "(?ms)^## Validation\r?\n\r?\n.*?(?=^## |\z)") {
+        $content = [regex]::Replace($content, "(?ms)^## Validation\r?\n\r?\n.*?(?=^## |\z)", $validationBlock)
+    }
+    else {
+        $content = $content.TrimEnd() + "`r`n`r`n" + $validationBlock + "`r`n"
     }
 
     Set-Content -LiteralPath $summaryPath -Value $content -Encoding UTF8 -NoNewline
@@ -442,30 +551,14 @@ function Normalize-RunResultContract {
         $executionStatus = if ($status -in $executionStatuses) { $status } else { "failed" }
     }
 
-    if ($Result.PSObject.Properties.Name.Contains("status")) {
-        $Result.status = $executionStatus
-    }
-    else {
-        $Result | Add-Member -NotePropertyName "status" -NotePropertyValue $executionStatus
-    }
-
-    if ($Result.PSObject.Properties.Name.Contains("executionStatus")) {
-        $Result.executionStatus = $executionStatus
-    }
-    else {
-        $Result | Add-Member -NotePropertyName "executionStatus" -NotePropertyValue $executionStatus
-    }
+    Set-ObjectProperty -Object $Result -Name "status" -Value $executionStatus
+    Set-ObjectProperty -Object $Result -Name "executionStatus" -Value $executionStatus
 
     $deliveryStatus = if ($Result.PSObject.Properties.Name.Contains("deliveryStatus")) { [string]$Result.deliveryStatus } else { "" }
     if ($deliveryStatus -notin $deliveryStatuses) {
         $deliveryStatus = "not_requested"
     }
-    if ($Result.PSObject.Properties.Name.Contains("deliveryStatus")) {
-        $Result.deliveryStatus = $deliveryStatus
-    }
-    else {
-        $Result | Add-Member -NotePropertyName "deliveryStatus" -NotePropertyValue $deliveryStatus
-    }
+    Set-ObjectProperty -Object $Result -Name "deliveryStatus" -Value $deliveryStatus
 
     if (-not $Result.PSObject.Properties.Name.Contains("deliveryChannel")) {
         $Result | Add-Member -NotePropertyName "deliveryChannel" -NotePropertyValue $null
@@ -498,16 +591,8 @@ function Normalize-RunResultContract {
         $Result | Add-Member -NotePropertyName "artifacts" -NotePropertyValue ([pscustomobject]$artifacts)
     }
 
-    if (-not $Result.PSObject.Properties.Name.Contains("validationSummary")) {
-        $validationItems = @()
-        if ($Result.PSObject.Properties.Name.Contains("workingTreeClean")) {
-            $validationItems += if ([bool]$Result.workingTreeClean) { "git status --short clean" } else { "git status --short not clean or unavailable" }
-        }
-        if ($Result.PSObject.Properties.Name.Contains("deliveryStatus")) {
-            $validationItems += "deliveryStatus=$($Result.deliveryStatus)"
-        }
-        $Result | Add-Member -NotePropertyName "validationSummary" -NotePropertyValue $validationItems
-    }
+    Normalize-WorkerReportFields -Result $Result
+    Set-RunDerivedFields -Result $Result
 
     if (-not $Result.PSObject.Properties.Name.Contains("errors")) {
         $errors = @()
@@ -518,11 +603,6 @@ function Normalize-RunResultContract {
             $errors += @($Result.reviewHints | Where-Object { -not [string]::IsNullOrWhiteSpace([string]$_) } | ForEach-Object { [string]$_ })
         }
         $Result | Add-Member -NotePropertyName "errors" -NotePropertyValue @($errors | Select-Object -Unique)
-    }
-
-    if (-not $Result.PSObject.Properties.Name.Contains("recovery")) {
-        $detail = if ($Result.PSObject.Properties.Name.Contains("deliveryDetail")) { [string]$Result.deliveryDetail } else { "" }
-        $Result | Add-Member -NotePropertyName "recovery" -NotePropertyValue (Get-DeliveryRecoveryMessage -DeliveryStatus $deliveryStatus -Detail $detail)
     }
 
     return $Result
@@ -673,6 +753,7 @@ function Update-RunDeliveryStatus {
             $result.deliveryDetail = $Detail
         }
     }
+    Set-RunDerivedFields -Result $result
 
     if ($result.status -ne $previousStatus -or $result.executionStatus -ne $previousExecutionStatus) {
         throw "Delivery update attempted to alter execution status for task $TaskId."

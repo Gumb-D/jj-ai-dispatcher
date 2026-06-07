@@ -141,6 +141,16 @@ export const runOutputSchema = z.object({
   workingTreeClean: z.boolean().optional().describe("Whether the git working tree is clean."),
   validationSummary: z.array(z.string()).optional().describe("Focused validation summary captured or derived from the run result."),
   summary: z.string().optional().describe("Human readable summary of the task run."),
+  workerSummary: z.string().optional().describe("Bounded redacted one-line summary derived from the worker's final report."),
+  workerReport: z.string().optional().describe("Bounded redacted worker final report persisted for read-only/no-change retrieval."),
+  workerReportMetadata: z.object({
+    maxLength: z.number().optional().describe("Maximum persisted worker report length."),
+    originalLength: z.number().optional().describe("Redacted report length before truncation."),
+    persistedLength: z.number().optional().describe("Persisted report length after truncation."),
+    truncated: z.boolean().optional().describe("Whether the worker report was truncated."),
+    redacted: z.boolean().optional().describe("Whether redaction was applied before persistence.")
+  }).passthrough().optional().describe("Worker report truncation and redaction metadata."),
+  workerReportTruncated: z.boolean().optional().describe("Backward-compatible shortcut for workerReportMetadata.truncated."),
   logs: logsSchema.optional().describe("Log references for this run."),
   artifacts: artifactsSchema.optional().describe("Run artifact paths available for retrieval or manual review."),
   error: z.string().optional().describe("Error details if the task failed."),

@@ -180,6 +180,8 @@ Current result retrieval rules:
 - `dispatcher_get_run` uses the exact task ID and returns that run only.
 - Completed `result.json` files remain retrievable after bridge restart because retrieval reads persisted run artifacts.
 - In-memory task state, browser postback queue state, and active browser typing state do not survive bridge restart.
+- Read-only and no-change worker conclusions are persisted as redacted, bounded `workerSummary`, `workerReport`, `workerReportMetadata`, and `workerReportTruncated` fields, and are included in `summary.md`.
+- The worker report is captured from the already-collected worker output. It does not add an MCP tool or arbitrary file-read endpoint.
 
 Primary recovery workflow:
 
@@ -235,7 +237,7 @@ Browser delivery updates may change only delivery fields:
 - `deliveryStatus`
 - `deliveryChannel`
 - `deliveryRequired`
-- delivery-related summary or recovery text
+- delivery-related summary, validation summary, or recovery text
 
 Browser delivery must not overwrite top-level `status` or `executionStatus`.
 

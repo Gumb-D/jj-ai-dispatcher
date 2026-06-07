@@ -113,6 +113,47 @@ const failedDeliveryFailure = {
   reviewHints: ["failure"]
 };
 
+const noChangeReportSuccess = {
+  taskId: "20260606-120006-report",
+  status: "success",
+  executionStatus: "success",
+  deliveryStatus: "not_requested",
+  deliveryChannel: null,
+  deliveryRequired: false,
+  repo: "D:/dev/projects/jj-ai-dispatcher",
+  worker: "codex",
+  filesChanged: [],
+  commit: null,
+  commitMessage: "test: no-change report",
+  pushed: false,
+  workingTreeClean: true,
+  summary: "Codex worker completed successfully. No changes detected.",
+  workerSummary: "Substantive read-only conclusion.",
+  workerReport: "Substantive read-only conclusion.\nNo code changes are needed.\nAuthorization: Bearer abcdefghijklmnopqrstuvwxyz012345",
+  needsReview: false,
+  reviewHints: []
+};
+
+const longReportSuccess = {
+  taskId: "20260606-120007-long",
+  status: "success",
+  executionStatus: "success",
+  deliveryStatus: "delivered",
+  deliveryChannel: "browser_postback",
+  deliveryRequired: false,
+  repo: "D:/dev/projects/jj-ai-dispatcher",
+  worker: "codex",
+  filesChanged: [],
+  commit: null,
+  commitMessage: "test: long report",
+  pushed: false,
+  workingTreeClean: true,
+  summary: "Long report.",
+  workerReport: `${"A".repeat(12500)}\nsecret=do-not-return`,
+  needsReview: false,
+  reviewHints: []
+};
+
 function assert(condition, message) {
   if (!condition) {
     throw new Error(message);
@@ -128,6 +169,10 @@ function assertRunShape(result, expected) {
   assert(Array.isArray(result.validationSummary), `${expected.label} validationSummary missing`);
   assert(Array.isArray(result.errors), `${expected.label} errors missing`);
   assert(typeof result.recovery === "string" && result.recovery.length > 0, `${expected.label} recovery guidance missing`);
+  assert(typeof result.workerSummary === "string", `${expected.label} workerSummary missing`);
+  assert(typeof result.workerReport === "string", `${expected.label} workerReport missing`);
+  assert(typeof result.workerReportMetadata === "object", `${expected.label} workerReportMetadata missing`);
+  assert(typeof result.workerReportTruncated === "boolean", `${expected.label} workerReportTruncated missing`);
 }
 
 async function withServer(handler, callback) {
@@ -195,6 +240,32 @@ async function main() {
     deliveryRequired: false
   });
   console.log("PASS failed execution is not overwritten by delivery outcome");
+
+  const noChangeReport = normalizeRunResult(noChangeReportSuccess);
+  assertRunShape(noChangeReport, {
+    label: "no-change report",
+    status: "success",
+    executionStatus: "success",
+    deliveryStatus: "not_requested",
+    deliveryRequired: false
+  });
+  assert(noChangeReport.workerReport.includes("No code changes are needed."), "no-change report worker conclusion missing");
+  assert(!noChangeReport.workerReport.includes("abcdefghijklmnopqrstuvwxyz012345"), "token-like content was not redacted");
+  assert(noChangeReport.workerReport.includes("[REDACTED]"), "token-like content did not include redaction marker");
+  console.log("PASS no-change worker report is preserved and redacted");
+
+  const longReport = normalizeRunResult(longReportSuccess);
+  assertRunShape(longReport, {
+    label: "long report",
+    status: "success",
+    executionStatus: "success",
+    deliveryStatus: "delivered",
+    deliveryRequired: false
+  });
+  assert(longReport.workerReportMetadata.truncated === true, "long report truncation metadata missing");
+  assert(longReport.workerReport.length <= longReport.workerReportMetadata.maxLength, "long report exceeded max length");
+  assert(longReport.workerReportTruncated === true, "workerReportTruncated shortcut missing");
+  console.log("PASS long worker report is truncated with metadata");
 
   await withServer((request, response) => {
     const body = request.url === "/runs/latest" ? timeoutSuccess : deliveredSuccess;
