@@ -182,6 +182,7 @@ function Invoke-LifecycleCase {
         [string]$GitExe = "",
         [string]$PushControl = "",
         [string]$PreallocatedTaskId = "",
+        [hashtable]$SequenceMetadata = @{},
         [switch]$AllowAutoPush
     )
 
@@ -195,12 +196,12 @@ function Invoke-LifecycleCase {
     else {
         Set-Content -LiteralPath (Join-Path $inboxRoot "codex-task.push.txt") -Value $PushControl -Encoding UTF8
     }
-    if ([string]::IsNullOrWhiteSpace($PreallocatedTaskId)) {
+    if ([string]::IsNullOrWhiteSpace($PreallocatedTaskId) -and $SequenceMetadata.Count -eq 0) {
         Remove-Item -LiteralPath (Join-Path $inboxRoot "codex-task.meta.json") -ErrorAction SilentlyContinue
     }
     else {
         $metadata = [ordered]@{
-            taskId = $PreallocatedTaskId
+            taskId = if ([string]::IsNullOrWhiteSpace($PreallocatedTaskId)) { "20260607-021000-meta" } else { $PreallocatedTaskId }
             acceptedAt = "2026-06-07T02:00:00.0000000+08:00"
             taskPath = "dispatcher/runs/$PreallocatedTaskId/task.json"
             resultPath = "dispatcher/runs/$PreallocatedTaskId/result.json"
@@ -208,6 +209,9 @@ function Invoke-LifecycleCase {
             sequenceIndex = $null
             sequenceParentTaskId = $null
             sequenceRootTaskId = $null
+        }
+        foreach ($key in $SequenceMetadata.Keys) {
+            $metadata[$key] = $SequenceMetadata[$key]
         }
         Set-Content -LiteralPath (Join-Path $inboxRoot "codex-task.meta.json") -Value ($metadata | ConvertTo-Json -Depth 10) -Encoding UTF8 -NoNewline
     }
@@ -230,7 +234,12 @@ function Invoke-LifecycleCase {
 
     & pwsh -NoProfile -ExecutionPolicy Bypass -File $runScript codex_task | Out-Host
     $exitCode = $LASTEXITCODE
-    $run = Get-LatestRun
+    $run = if ([string]::IsNullOrWhiteSpace($PreallocatedTaskId)) {
+        Get-LatestRun
+    }
+    else {
+        Get-Item -LiteralPath (Join-Path (Join-Path $dispatcherRoot "runs") $PreallocatedTaskId)
+    }
     $resultPath = Join-Path $run.FullName "result.json"
     $taskPath = Join-Path $run.FullName "task.json"
     $summaryPath = Join-Path $run.FullName "summary.md"
@@ -272,6 +281,13 @@ function Invoke-LifecycleCase {
         pushDecisionShouldPush = $result.pushDecision.shouldPush
         pushDecisionSource = $result.pushDecision.source
         pushDecisionReason = $result.pushDecisionReason
+        sequenceId = if ($result.PSObject.Properties.Name.Contains("sequenceId")) { $result.sequenceId } else { $null }
+        taskIndex = if ($result.PSObject.Properties.Name.Contains("taskIndex")) { $result.taskIndex } else { $null }
+        taskIdentityHash = if ($result.PSObject.Properties.Name.Contains("taskIdentityHash")) { $result.taskIdentityHash } else { $null }
+        payloadHash = if ($result.PSObject.Properties.Name.Contains("payloadHash")) { $result.payloadHash } else { $null }
+        idempotencyKey = if ($result.PSObject.Properties.Name.Contains("idempotencyKey")) { $result.idempotencyKey } else { $null }
+        pushRequested = if ($result.PSObject.Properties.Name.Contains("pushRequested")) { $result.pushRequested } else { $null }
+        taskJsonPushRequested = if ($taskJson.PSObject.Properties.Name.Contains("pushRequested")) { $taskJson.pushRequested } else { $null }
         filesChanged = @($result.filesChanged)
         workingTreeClean = $result.workingTreeClean
         reviewHints = @($result.reviewHints)
@@ -339,6 +355,29 @@ try {
     if ($pushDisabled.pushDecisionSource -ne "task_opt_in") { throw "push-disabled push decision source expected task_opt_in." }
     if (-not ($pushDisabled.reviewHints -contains "Per-task push request was rejected because global allowAutoPush=false.")) { throw "push-disabled did not report disabled auto push." }
 
+    $metadataPushDisabled = Invoke-LifecycleCase `
+        -Name "metadata-push-disabled" `
+        -Mode "success" `
+        -WorkerPath $worker `
+        -PushControl "true" `
+        -PreallocatedTaskId "20260607-020100-metapushoff" `
+        -SequenceMetadata @{
+            sequenceId = "seq-local-001"
+            taskIndex = 4
+            taskIdentityHash = "a" * 64
+            payloadHash = "b" * 64
+            idempotencyKey = "p4:seq-local-001:task-004:$('b' * 64)"
+            pushRequested = $true
+        }
+    $results += $metadataPushDisabled
+    if ($metadataPushDisabled.status -ne "failed") { throw "metadata-push-disabled status expected failed but was $($metadataPushDisabled.status)." }
+    if ($metadataPushDisabled.pushRequested -ne $true) { throw "metadata-push-disabled did not persist pushRequested=true in result.json." }
+    if ($metadataPushDisabled.taskJsonPushRequested -ne $true) { throw "metadata-push-disabled did not persist pushRequested=true in task.json." }
+    if ($metadataPushDisabled.sequenceId -ne "seq-local-001") { throw "metadata-push-disabled did not persist sequenceId." }
+    if ($metadataPushDisabled.taskIndex -ne 4) { throw "metadata-push-disabled did not persist taskIndex." }
+    if ($metadataPushDisabled.pushDecisionSource -ne "task_opt_in") { throw "metadata-push-disabled push decision source expected task_opt_in." }
+    if (-not ($metadataPushDisabled.reviewHints -contains "Per-task push request was rejected because global allowAutoPush=false.")) { throw "metadata-push-disabled did not stay gated by global allowAutoPush=false." }
+
     Remove-Item -LiteralPath $pushMarker -ErrorAction SilentlyContinue
     $globalPush = Invoke-LifecycleCase -Name "global-push-default" -Mode "success" -WorkerPath $worker -GitExe $pushTrackingGit -AllowAutoPush
     $results += $globalPush
@@ -356,12 +395,50 @@ try {
     if (Test-Path -LiteralPath $pushMarker -PathType Leaf) { throw "push-opt-out unexpectedly exercised fake git push." }
 
     Remove-Item -LiteralPath $pushMarker -ErrorAction SilentlyContinue
+    $metadataPushOptOut = Invoke-LifecycleCase `
+        -Name "metadata-push-opt-out" `
+        -Mode "success" `
+        -WorkerPath $worker `
+        -GitExe $pushTrackingGit `
+        -PushControl "false" `
+        -PreallocatedTaskId "20260607-020101-metapushout" `
+        -SequenceMetadata @{
+            pushRequested = $false
+        } `
+        -AllowAutoPush
+    $results += $metadataPushOptOut
+    if ($metadataPushOptOut.status -ne "success") { throw "metadata-push-opt-out status expected success but was $($metadataPushOptOut.status)." }
+    if ($metadataPushOptOut.pushRequested -ne $false) { throw "metadata-push-opt-out did not persist pushRequested=false in result.json." }
+    if ($metadataPushOptOut.taskJsonPushRequested -ne $false) { throw "metadata-push-opt-out did not persist pushRequested=false in task.json." }
+    if ($metadataPushOptOut.pushDecisionSource -ne "task_opt_out") { throw "metadata-push-opt-out push decision source expected task_opt_out." }
+    if (Test-Path -LiteralPath $pushMarker -PathType Leaf) { throw "metadata-push-opt-out unexpectedly exercised fake git push." }
+
+    Remove-Item -LiteralPath $pushMarker -ErrorAction SilentlyContinue
     $pushAllowed = Invoke-LifecycleCase -Name "push-allowed" -Mode "success" -WorkerPath $worker -GitExe $pushTrackingGit -PushControl "true" -AllowAutoPush
     $results += $pushAllowed
     if ($pushAllowed.status -ne "success") { throw "push-allowed status expected success but was $($pushAllowed.status)." }
     if ($pushAllowed.pushed -ne $true) { throw "push-allowed did not record pushed=true." }
     if ($pushAllowed.pushDecisionSource -ne "task_opt_in") { throw "push-allowed push decision source expected task_opt_in." }
     if (-not (Test-Path -LiteralPath $pushMarker -PathType Leaf)) { throw "push-allowed did not exercise fake git push." }
+
+    Remove-Item -LiteralPath $pushMarker -ErrorAction SilentlyContinue
+    $metadataPushAllowed = Invoke-LifecycleCase `
+        -Name "metadata-push-allowed" `
+        -Mode "success" `
+        -WorkerPath $worker `
+        -GitExe $pushTrackingGit `
+        -PushControl "true" `
+        -PreallocatedTaskId "20260607-020102-metapushon" `
+        -SequenceMetadata @{
+            pushRequested = $true
+        } `
+        -AllowAutoPush
+    $results += $metadataPushAllowed
+    if ($metadataPushAllowed.status -ne "success") { throw "metadata-push-allowed status expected success but was $($metadataPushAllowed.status)." }
+    if ($metadataPushAllowed.pushRequested -ne $true) { throw "metadata-push-allowed did not persist pushRequested=true." }
+    if ($metadataPushAllowed.pushed -ne $true) { throw "metadata-push-allowed did not record pushed=true." }
+    if ($metadataPushAllowed.pushDecisionSource -ne "task_opt_in") { throw "metadata-push-allowed push decision source expected task_opt_in." }
+    if (-not (Test-Path -LiteralPath $pushMarker -PathType Leaf)) { throw "metadata-push-allowed did not exercise fake git push." }
 
     Remove-Item -LiteralPath $pushMarker -ErrorAction SilentlyContinue
     $pushFailure = Invoke-LifecycleCase -Name "push-failure" -Mode "success" -WorkerPath $worker -GitExe $pushFailureGit -AllowAutoPush

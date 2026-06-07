@@ -499,6 +499,71 @@ function Test-TaskId {
     return -not [string]::IsNullOrWhiteSpace($TaskId) -and $TaskId -match '^[0-9]{8}-[0-9]{6}-[A-Za-z0-9_-]+$'
 }
 
+function Test-SequenceIdentifier {
+    param([string]$Value)
+
+    return -not [string]::IsNullOrWhiteSpace($Value) -and $Value.Length -le 64 -and $Value -cmatch '^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$' -and $Value -ne "." -and $Value -ne ".." -and -not $Value.Contains("..")
+}
+
+function Test-Sha256Hash {
+    param([string]$Value)
+
+    return -not [string]::IsNullOrWhiteSpace($Value) -and $Value -cmatch '^[a-f0-9]{64}$'
+}
+
+function Test-IdempotencyKey {
+    param([string]$Value)
+
+    return -not [string]::IsNullOrWhiteSpace($Value) -and $Value.Length -le 200 -and $Value -cmatch '^[A-Za-z0-9][A-Za-z0-9_.:-]{0,199}$' -and $Value -ne "." -and $Value -ne ".." -and -not $Value.Contains("..")
+}
+
+function Assert-DispatchSequenceMetadata {
+    param([pscustomobject]$Dispatch)
+
+    if ($Dispatch.PSObject.Properties.Name.Contains("sequenceId") -and -not (Test-SequenceIdentifier -Value ([string]$Dispatch.sequenceId))) {
+        throw "invalid_sequence_metadata:Malformed sequenceId."
+    }
+    if ($Dispatch.PSObject.Properties.Name.Contains("taskIndex")) {
+        $rawTaskIndex = $Dispatch.taskIndex
+        if (($rawTaskIndex -isnot [byte]) -and ($rawTaskIndex -isnot [int16]) -and ($rawTaskIndex -isnot [int]) -and ($rawTaskIndex -isnot [int64]) -and ($rawTaskIndex -isnot [double]) -and ($rawTaskIndex -isnot [decimal])) {
+            throw "invalid_sequence_metadata:Malformed taskIndex."
+        }
+        try {
+            $taskIndex = [int64]$rawTaskIndex
+        }
+        catch {
+            throw "invalid_sequence_metadata:Malformed taskIndex."
+        }
+        if ($taskIndex -lt 0 -or [decimal]$taskIndex -ne [decimal]$rawTaskIndex) {
+            throw "invalid_sequence_metadata:Malformed taskIndex."
+        }
+    }
+    foreach ($name in @("taskIdentityHash", "payloadHash")) {
+        if ($Dispatch.PSObject.Properties.Name.Contains($name) -and -not (Test-Sha256Hash -Value ([string]$Dispatch.$name))) {
+            throw "invalid_sequence_metadata:Malformed $name."
+        }
+    }
+    if ($Dispatch.PSObject.Properties.Name.Contains("idempotencyKey") -and -not (Test-IdempotencyKey -Value ([string]$Dispatch.idempotencyKey))) {
+        throw "invalid_sequence_metadata:Malformed idempotencyKey."
+    }
+    if ($Dispatch.PSObject.Properties.Name.Contains("pushRequested") -and $Dispatch.pushRequested -isnot [bool]) {
+        throw "invalid_sequence_metadata:Malformed pushRequested."
+    }
+}
+
+function Add-OptionalDispatchMetadata {
+    param(
+        [System.Collections.Specialized.OrderedDictionary]$Target,
+        [pscustomobject]$Dispatch
+    )
+
+    foreach ($name in @("sequenceId", "taskIndex", "taskIdentityHash", "payloadHash", "idempotencyKey", "pushRequested")) {
+        if ($Dispatch.PSObject.Properties.Name.Contains($name)) {
+            $Target[$name] = $Dispatch.$name
+        }
+    }
+}
+
 function New-AcceptedRunContext {
     param([pscustomobject]$Dispatch)
 
@@ -547,6 +612,7 @@ function New-AcceptedRunContext {
             sequenceParentTaskId = $null
             sequenceRootTaskId = $null
         }
+        Add-OptionalDispatchMetadata -Target $taskContract -Dispatch $Dispatch
         Write-JsonFile -Path $taskPath -Value $taskContract
 
         return [pscustomobject]@{
@@ -623,6 +689,7 @@ function Write-FailedAcceptedRunResult {
         sequenceParentTaskId = $null
         sequenceRootTaskId = $null
     }
+    Add-OptionalDispatchMetadata -Target $result -Dispatch $Dispatch
     Write-JsonFile -Path $RunContext.ResultPath -Value $result
 }
 
@@ -656,6 +723,12 @@ function Write-DispatchInboxFiles {
         Remove-Item -LiteralPath $commitPath -ErrorAction SilentlyContinue
     }
 
+    $pushPath = Join-Path $inboxDir "codex-task.push.txt"
+    if ($Dispatch.PSObject.Properties.Name.Contains("pushRequested")) {
+        $pushValue = if ([bool]$Dispatch.pushRequested) { "true" } else { "false" }
+        Set-Content -LiteralPath $pushPath -Value $pushValue -Encoding UTF8 -NoNewline
+    }
+
     $metadataPath = Join-Path $inboxDir "codex-task.meta.json"
     if ($null -ne $RunContext) {
         $metadata = [ordered]@{
@@ -668,6 +741,7 @@ function Write-DispatchInboxFiles {
             sequenceParentTaskId = $null
             sequenceRootTaskId = $null
         }
+        Add-OptionalDispatchMetadata -Target $metadata -Dispatch $Dispatch
         Write-JsonFile -Path $metadataPath -Value $metadata
     }
     else {
@@ -751,6 +825,18 @@ function Invoke-DispatchRequest {
         return
     }
 
+    try {
+        Assert-DispatchSequenceMetadata -Dispatch $dispatch
+    }
+    catch {
+        Write-JsonResponse -Response $response -StatusCode 400 -Body ([ordered]@{
+            accepted = $false
+            status = "invalid_sequence_metadata"
+            error = $_.Exception.Message
+        })
+        return
+    }
+
     $acceptedRun = $null
     try {
         if ($dispatch.PSObject.Properties.Name.Contains("conversationUuid")) {
@@ -788,7 +874,7 @@ function Invoke-DispatchRequest {
         return
     }
 
-    Write-JsonResponse -Response $response -StatusCode 202 -Body ([ordered]@{
+    $acceptedResponse = [ordered]@{
         accepted = $true
         status = "running"
         worker = "codex"
@@ -798,7 +884,9 @@ function Invoke-DispatchRequest {
         acceptedAt = $acceptedRun.AcceptedAt
         taskPath = $acceptedRun.TaskRelativePath
         resultPath = $acceptedRun.ResultRelativePath
-    })
+    }
+    Add-OptionalDispatchMetadata -Target $acceptedResponse -Dispatch $dispatch
+    Write-JsonResponse -Response $response -StatusCode 202 -Body $acceptedResponse
 }
 
 function Get-RunResultPath {
@@ -838,7 +926,7 @@ function Convert-TaskContractToRunResult {
     $executionStatus = if ($Task.PSObject.Properties.Name.Contains("executionStatus") -and -not [string]::IsNullOrWhiteSpace($Task.executionStatus)) { [string]$Task.executionStatus } else { "queued" }
     $acceptedAt = if ($Task.PSObject.Properties.Name.Contains("acceptedAt")) { ConvertTo-IsoTimestampString -Value $Task.acceptedAt } else { $null }
 
-    return [pscustomobject][ordered]@{
+    $result = [ordered]@{
         taskId = $taskId
         status = $executionStatus
         executionStatus = $executionStatus
@@ -868,6 +956,12 @@ function Convert-TaskContractToRunResult {
         sequenceParentTaskId = if ($Task.PSObject.Properties.Name.Contains("sequenceParentTaskId")) { $Task.sequenceParentTaskId } else { $null }
         sequenceRootTaskId = if ($Task.PSObject.Properties.Name.Contains("sequenceRootTaskId")) { $Task.sequenceRootTaskId } else { $null }
     }
+    foreach ($name in @("taskIndex", "taskIdentityHash", "payloadHash", "idempotencyKey", "pushRequested")) {
+        if ($Task.PSObject.Properties.Name.Contains($name)) {
+            $result[$name] = $Task.$name
+        }
+    }
+    return [pscustomobject]$result
 }
 
 function Normalize-RunResultContract {

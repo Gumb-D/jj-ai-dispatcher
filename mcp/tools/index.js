@@ -35,7 +35,8 @@ export function registerDispatcherTools(server, bridgeClient) {
       repo: payload.repo,
       worker: payload.worker,
       task: formatTaskEnvelope(payload),
-      commitMessage: payload.commitMessage
+      commitMessage: payload.commitMessage,
+      ...getOptionalDispatchMetadata(payload)
     });
   }));
 
@@ -64,6 +65,16 @@ async function callTool(fn) {
   } catch (error) {
     return toToolResult(safeErrorResult(error));
   }
+}
+
+function getOptionalDispatchMetadata(payload) {
+  const metadata = {};
+  for (const name of ["sequenceId", "taskIndex", "taskIdentityHash", "payloadHash", "idempotencyKey", "pushRequested"]) {
+    if (Object.prototype.hasOwnProperty.call(payload, name)) {
+      metadata[name] = payload[name];
+    }
+  }
+  return metadata;
 }
 
 function formatTaskEnvelope(payload) {

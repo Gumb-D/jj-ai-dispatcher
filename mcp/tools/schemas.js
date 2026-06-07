@@ -3,6 +3,17 @@ import { z } from "zod";
 import { ValidationError } from "../server/errors.js";
 
 const stringArray = z.array(z.string().min(1)).min(1);
+const identifierSchema = z.string()
+  .min(1)
+  .max(64)
+  .regex(/^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$/)
+  .refine((value) => value !== "." && value !== ".." && !value.includes(".."));
+const hashSchema = z.string().regex(/^[a-f0-9]{64}$/);
+const idempotencyKeySchema = z.string()
+  .min(1)
+  .max(200)
+  .regex(/^[A-Za-z0-9][A-Za-z0-9_.:-]{0,199}$/)
+  .refine((value) => value !== "." && value !== ".." && !value.includes(".."));
 
 export const emptyInputSchema = z.object({}).strict();
 
@@ -14,7 +25,13 @@ export const dispatchInputSchema = z.object({
   scope: stringArray,
   blocked: stringArray,
   validation: stringArray,
-  expectedOutput: stringArray
+  expectedOutput: stringArray,
+  sequenceId: identifierSchema.optional(),
+  taskIndex: z.number().int().min(0).optional(),
+  taskIdentityHash: hashSchema.optional(),
+  payloadHash: hashSchema.optional(),
+  idempotencyKey: idempotencyKeySchema.optional(),
+  pushRequested: z.boolean().optional()
 }).strict();
 
 export const getRunInputSchema = z.object({
@@ -29,7 +46,13 @@ export const dispatchInputShape = {
   scope: z.array(z.string()).describe("Approved file or directory scope."),
   blocked: z.array(z.string()).describe("Files, folders, or behaviors that are out of bounds."),
   validation: z.array(z.string()).describe("Validation the worker is expected to run or report."),
-  expectedOutput: z.array(z.string()).describe("Concrete expected result artifacts or changes.")
+  expectedOutput: z.array(z.string()).describe("Concrete expected result artifacts or changes."),
+  sequenceId: identifierSchema.optional().describe("Optional sequence correlation identifier. Correlation only; does not execute a sequence."),
+  taskIndex: z.number().int().min(0).optional().describe("Optional zero-based task index within an external sequence."),
+  taskIdentityHash: hashSchema.optional().describe("Optional lowercase SHA-256 task identity hash."),
+  payloadHash: hashSchema.optional().describe("Optional lowercase SHA-256 payload hash."),
+  idempotencyKey: idempotencyKeySchema.optional().describe("Optional safe idempotency key for external correlation."),
+  pushRequested: z.boolean().optional().describe("Optional explicit per-task push transport override. false opts out; true requests push subject to global policy.")
 };
 
 export const getRunInputShape = {
@@ -113,6 +136,12 @@ export const dispatchOutputSchema = z.object({
   acceptedAt: z.string().optional().describe("Acceptance timestamp for the durable task ID."),
   taskPath: z.string().optional().describe("Relative task.json artifact path for the accepted run."),
   resultPath: z.string().optional().describe("Relative result.json artifact path for the accepted run."),
+  sequenceId: z.string().optional().describe("Optional sequence correlation identifier echoed from dispatch input."),
+  taskIndex: z.number().optional().describe("Optional task index echoed from dispatch input."),
+  taskIdentityHash: z.string().optional().describe("Optional task identity hash echoed from dispatch input."),
+  payloadHash: z.string().optional().describe("Optional payload hash echoed from dispatch input."),
+  idempotencyKey: z.string().optional().describe("Optional idempotency key echoed from dispatch input."),
+  pushRequested: z.boolean().optional().describe("Optional explicit per-task push request echoed from dispatch input."),
   error: z.string().optional().describe("Reason why the dispatch failed."),
   errorType: z.string().optional().describe("Type classification of this error."),
   message: z.string().optional().describe("Detailed human-readable error description."),
@@ -178,6 +207,11 @@ export const runOutputSchema = z.object({
   needsReview: z.boolean().optional().describe("Whether this run needs manual code review."),
   reviewHints: z.array(z.string()).optional().describe("Specific review hints or guidelines for the user."),
   sequenceId: z.string().nullable().optional().describe("Optional sequence correlation ID; null when not part of a sequence."),
+  taskIndex: z.number().nullable().optional().describe("Optional task index for sequence correlation only."),
+  taskIdentityHash: z.string().nullable().optional().describe("Optional lowercase SHA-256 task identity hash for sequence correlation only."),
+  payloadHash: z.string().nullable().optional().describe("Optional lowercase SHA-256 payload hash for sequence correlation only."),
+  idempotencyKey: z.string().nullable().optional().describe("Optional idempotency key for sequence correlation only."),
+  pushRequested: z.boolean().nullable().optional().describe("Optional explicit per-task push request supplied at dispatch time."),
   sequenceIndex: z.number().nullable().optional().describe("Optional sequence index; null when not part of a sequence."),
   sequenceParentTaskId: z.string().nullable().optional().describe("Optional parent task ID for sequence correlation only."),
   sequenceRootTaskId: z.string().nullable().optional().describe("Optional root task ID for sequence correlation only."),

@@ -76,6 +76,15 @@ function makeValidDispatch(overrides = {}) {
   };
 }
 
+const validSequenceMetadata = {
+  sequenceId: "seq-local-001",
+  taskIndex: 2,
+  taskIdentityHash: "a".repeat(64),
+  payloadHash: "b".repeat(64),
+  idempotencyKey: `p4:seq-local-001:task-002:${"b".repeat(64)}`,
+  pushRequested: false
+};
+
 async function withHttpServer(handler, callback) {
   const server = http.createServer(handler);
   await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
@@ -115,11 +124,20 @@ async function testToolRegistrationAndSafety() {
         taskId: "20260607-010000-contract",
         acceptedAt: "2026-06-07T01:00:00.0000000+08:00",
         taskPath: "dispatcher/runs/20260607-010000-contract/task.json",
-        resultPath: "dispatcher/runs/20260607-010000-contract/result.json"
+        resultPath: "dispatcher/runs/20260607-010000-contract/result.json",
+        ...Object.fromEntries(Object.entries(payload).filter(([key]) => Object.prototype.hasOwnProperty.call(validSequenceMetadata, key)))
       };
     },
-    latestResult: () => ({ status: "error", errorType: "bridge_error", message: "No run results found.", retryable: false, bridgeStatus: 404 }),
-    getRun: () => ({ taskId: "20260607-010000-contract", status: "success" })
+    latestResult: () => ({
+      taskId: "20260607-010000-contract",
+      status: "success",
+      ...validSequenceMetadata
+    }),
+    getRun: () => ({
+      taskId: "20260607-010000-contract",
+      status: "success",
+      ...validSequenceMetadata
+    })
   });
 
   assert(JSON.stringify(registry.names()) === JSON.stringify([...EXPECTED_TOOLS].sort()), "MCP tool registration changed");
@@ -134,6 +152,18 @@ async function testToolRegistrationAndSafety() {
   const invalidWorker = parseToolResult(await registry.call("dispatcher_dispatch", makeValidDispatch({ worker: "openclaw" })));
   assert(invalidWorker.status === "error" && invalidWorker.errorType === "validation_error", "invalid worker was not rejected");
 
+  const invalidSequenceId = parseToolResult(await registry.call("dispatcher_dispatch", makeValidDispatch({ sequenceId: "../escape" })));
+  assert(invalidSequenceId.status === "error" && invalidSequenceId.errorType === "validation_error", "invalid sequenceId was not rejected");
+
+  const invalidTaskIndex = parseToolResult(await registry.call("dispatcher_dispatch", makeValidDispatch({ taskIndex: -1 })));
+  assert(invalidTaskIndex.status === "error" && invalidTaskIndex.errorType === "validation_error", "invalid taskIndex was not rejected");
+
+  const invalidHash = parseToolResult(await registry.call("dispatcher_dispatch", makeValidDispatch({ payloadHash: "A".repeat(64) })));
+  assert(invalidHash.status === "error" && invalidHash.errorType === "validation_error", "invalid hash was not rejected");
+
+  const invalidIdempotencyKey = parseToolResult(await registry.call("dispatcher_dispatch", makeValidDispatch({ idempotencyKey: "bad/key" })));
+  assert(invalidIdempotencyKey.status === "error" && invalidIdempotencyKey.errorType === "validation_error", "invalid idempotencyKey was not rejected");
+
   const unsafe = parseToolResult(await registry.call("dispatcher_dispatch", makeValidDispatch({ task: "Please run shell commands directly." })));
   assert(unsafe.status === "error" && unsafe.errorType === "validation_error", "unsafe dispatch was not rejected");
 
@@ -147,6 +177,26 @@ async function testToolRegistrationAndSafety() {
   assert(calls[0].task.includes("MCP safety fields:"), "dispatch envelope omitted MCP safety fields");
   assert(calls[0].task.includes("- scope:\n  - tests/**"), "dispatch envelope formatting changed");
   assert(calls[0].commitMessage === "test: mcp contract", "commit message was not forwarded separately");
+  assert(!Object.prototype.hasOwnProperty.call(calls[0], "sequenceId"), "absent optional sequence metadata was forwarded");
+
+  const acceptedWithMetadata = parseToolResult(await registry.call("dispatcher_dispatch", makeValidDispatch(validSequenceMetadata)));
+  assert(acceptedWithMetadata.sequenceId === validSequenceMetadata.sequenceId, "dispatch response sequenceId did not round-trip");
+  assert(acceptedWithMetadata.taskIndex === validSequenceMetadata.taskIndex, "dispatch response taskIndex did not round-trip");
+  assert(acceptedWithMetadata.taskIdentityHash === validSequenceMetadata.taskIdentityHash, "dispatch response taskIdentityHash did not round-trip");
+  assert(acceptedWithMetadata.payloadHash === validSequenceMetadata.payloadHash, "dispatch response payloadHash did not round-trip");
+  assert(acceptedWithMetadata.idempotencyKey === validSequenceMetadata.idempotencyKey, "dispatch response idempotencyKey did not round-trip");
+  assert(acceptedWithMetadata.pushRequested === false, "dispatch response pushRequested did not round-trip");
+  assert(calls[1].sequenceId === validSequenceMetadata.sequenceId, "sequenceId was not forwarded to bridge payload");
+  assert(calls[1].pushRequested === false, "pushRequested=false was not forwarded to bridge payload");
+
+  const latest = parseToolResult(await registry.call("dispatcher_latest_result", {}));
+  assert(latest.sequenceId === validSequenceMetadata.sequenceId, "latest_result sequenceId missing");
+  assert(latest.taskIndex === validSequenceMetadata.taskIndex, "latest_result taskIndex missing");
+  assert(latest.payloadHash === validSequenceMetadata.payloadHash, "latest_result payloadHash missing");
+
+  const run = parseToolResult(await registry.call("dispatcher_get_run", { taskId: "20260607-010000-contract" }));
+  assert(run.idempotencyKey === validSequenceMetadata.idempotencyKey, "get_run idempotencyKey missing");
+  assert(run.pushRequested === false, "get_run pushRequested missing");
 
   const status = parseToolResult(await registry.call("dispatcher_status", {}));
   assert(status.autoPush === false, "dispatcher_status autoPush compatibility alias changed");

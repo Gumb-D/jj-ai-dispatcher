@@ -51,6 +51,58 @@ function Test-TaskId {
     return -not [string]::IsNullOrWhiteSpace($TaskId) -and $TaskId -match '^[0-9]{8}-[0-9]{6}-[A-Za-z0-9_-]+$'
 }
 
+function Test-SequenceIdentifier {
+    param([string]$Value)
+
+    return -not [string]::IsNullOrWhiteSpace($Value) -and $Value.Length -le 64 -and $Value -cmatch '^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$' -and $Value -ne "." -and $Value -ne ".." -and -not $Value.Contains("..")
+}
+
+function Test-Sha256Hash {
+    param([string]$Value)
+
+    return -not [string]::IsNullOrWhiteSpace($Value) -and $Value -cmatch '^[a-f0-9]{64}$'
+}
+
+function Test-IdempotencyKey {
+    param([string]$Value)
+
+    return -not [string]::IsNullOrWhiteSpace($Value) -and $Value.Length -le 200 -and $Value -cmatch '^[A-Za-z0-9][A-Za-z0-9_.:-]{0,199}$' -and $Value -ne "." -and $Value -ne ".." -and -not $Value.Contains("..")
+}
+
+function Assert-CodexTaskSequenceMetadata {
+    param([pscustomobject]$Metadata)
+
+    if ($Metadata.PSObject.Properties.Name.Contains("sequenceId") -and $null -ne $Metadata.sequenceId -and -not (Test-SequenceIdentifier -Value ([string]$Metadata.sequenceId))) {
+        throw "Invalid codex task metadata: malformed sequenceId."
+    }
+    if ($Metadata.PSObject.Properties.Name.Contains("taskIndex") -and $null -ne $Metadata.taskIndex) {
+        $rawTaskIndex = $Metadata.taskIndex
+        if (($rawTaskIndex -isnot [byte]) -and ($rawTaskIndex -isnot [int16]) -and ($rawTaskIndex -isnot [int]) -and ($rawTaskIndex -isnot [int64]) -and ($rawTaskIndex -isnot [double]) -and ($rawTaskIndex -isnot [decimal])) {
+            throw "Invalid codex task metadata: malformed taskIndex."
+        }
+        try {
+            $taskIndex = [int64]$rawTaskIndex
+        }
+        catch {
+            throw "Invalid codex task metadata: malformed taskIndex."
+        }
+        if ($taskIndex -lt 0 -or [decimal]$taskIndex -ne [decimal]$rawTaskIndex) {
+            throw "Invalid codex task metadata: malformed taskIndex."
+        }
+    }
+    foreach ($name in @("taskIdentityHash", "payloadHash")) {
+        if ($Metadata.PSObject.Properties.Name.Contains($name) -and $null -ne $Metadata.$name -and -not (Test-Sha256Hash -Value ([string]$Metadata.$name))) {
+            throw "Invalid codex task metadata: malformed $name."
+        }
+    }
+    if ($Metadata.PSObject.Properties.Name.Contains("idempotencyKey") -and $null -ne $Metadata.idempotencyKey -and -not (Test-IdempotencyKey -Value ([string]$Metadata.idempotencyKey))) {
+        throw "Invalid codex task metadata: malformed idempotencyKey."
+    }
+    if ($Metadata.PSObject.Properties.Name.Contains("pushRequested") -and $null -ne $Metadata.pushRequested -and $Metadata.pushRequested -isnot [bool]) {
+        throw "Invalid codex task metadata: malformed pushRequested."
+    }
+}
+
 function New-RunContext {
     param([string]$TaskId)
 
@@ -86,6 +138,8 @@ function Get-CodexTaskMetadata {
     if (-not $metadata.PSObject.Properties.Name.Contains("taskId") -or -not (Test-TaskId -TaskId ([string]$metadata.taskId))) {
         throw "Invalid codex task metadata: malformed taskId."
     }
+
+    Assert-CodexTaskSequenceMetadata -Metadata $metadata
 
     return $metadata
 }
@@ -237,21 +291,46 @@ function Set-CorrelationFields {
         return
     }
 
-    foreach ($name in @("acceptedAt", "sequenceId", "sequenceIndex", "sequenceParentTaskId", "sequenceRootTaskId")) {
+    $alwaysNames = @("acceptedAt", "sequenceId", "sequenceIndex", "sequenceParentTaskId", "sequenceRootTaskId")
+    foreach ($name in @("acceptedAt", "sequenceId", "taskIndex", "taskIdentityHash", "payloadHash", "idempotencyKey", "pushRequested", "sequenceIndex", "sequenceParentTaskId", "sequenceRootTaskId")) {
+        $hasValue = $false
         $value = $null
         if ($TaskContract -is [System.Collections.Specialized.OrderedDictionary] -and $TaskContract.Contains($name)) {
             $value = $TaskContract[$name]
+            $hasValue = $true
         }
         elseif ($TaskContract -is [System.Collections.IDictionary] -and $TaskContract.Contains($name)) {
             $value = $TaskContract[$name]
+            $hasValue = $true
         }
         elseif ($TaskContract.PSObject.Properties.Name.Contains($name)) {
             $value = $TaskContract.$name
+            $hasValue = $true
+        }
+        if (-not $hasValue -and $name -notin $alwaysNames) {
+            continue
         }
         if ($name -eq "acceptedAt") {
             $value = ConvertTo-IsoTimestampString -Value $value
         }
         Set-ObjectProperty -Object $Contract -Name $name -Value $value
+    }
+}
+
+function Add-OptionalTaskMetadata {
+    param(
+        [System.Collections.Specialized.OrderedDictionary]$Target,
+        [object]$Metadata
+    )
+
+    if ($null -eq $Metadata) {
+        return
+    }
+
+    foreach ($name in @("sequenceId", "taskIndex", "taskIdentityHash", "payloadHash", "idempotencyKey", "pushRequested")) {
+        if ($Metadata.PSObject.Properties.Name.Contains($name)) {
+            $Target[$name] = $Metadata.$name
+        }
     }
 }
 
@@ -1208,6 +1287,7 @@ if ($task.worker -eq "codex_inbox") {
         sequenceParentTaskId = if ($null -ne $taskMetadata -and $taskMetadata.PSObject.Properties.Name.Contains("sequenceParentTaskId")) { $taskMetadata.sequenceParentTaskId } else { $null }
         sequenceRootTaskId = if ($null -ne $taskMetadata -and $taskMetadata.PSObject.Properties.Name.Contains("sequenceRootTaskId")) { $taskMetadata.sequenceRootTaskId } else { $null }
     }
+    Add-OptionalTaskMetadata -Target $taskContract -Metadata $taskMetadata
     Write-JsonFile -Path $runContext.TaskJson -Value $taskContract
 }
 

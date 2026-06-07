@@ -95,6 +95,10 @@ if ($errors.Count -gt 0) {
     "Write-BridgeStep",
     "Write-JsonFile",
     "Set-ObjectProperty",
+    "Test-SequenceIdentifier",
+    "Test-Sha256Hash",
+    "Test-IdempotencyKey",
+    "Assert-DispatchSequenceMetadata",
     "Redact-ResultText",
     "Normalize-WorkerReportFields",
     "Normalize-PushDecisionFields",
@@ -104,9 +108,11 @@ if ($errors.Count -gt 0) {
     "Resolve-RepoTarget",
     "New-TaskId",
     "Test-TaskId",
+    "Add-OptionalDispatchMetadata",
     "Get-RunsRoot",
     "New-AcceptedRunContext",
     "Write-FailedAcceptedRunResult",
+    "Write-DispatchInboxFiles",
     "Get-RunResultPath",
     "Get-RunTaskPath",
     "Convert-TaskContractToRunResult",
@@ -193,6 +199,84 @@ try {
     Assert-Equal -Actual $acceptedContext.TaskRelativePath -Expected "dispatcher/runs/$afterCollision/task.json" -Message "accepted task relative path failed."
     Assert-Equal -Actual $acceptedContext.ResultRelativePath -Expected "dispatcher/runs/$afterCollision/result.json" -Message "accepted result relative path failed."
 
+    $metadataTaskId = "20260607-010700-metadata"
+    $metadataDispatch = [pscustomobject]@{
+        repo = "self"
+        worker = "codex"
+        task = "metadata allocation"
+        commitMessage = "test: metadata allocation"
+        sequenceId = "seq-local-001"
+        taskIndex = 3
+        taskIdentityHash = "a" * 64
+        payloadHash = "b" * 64
+        idempotencyKey = "p4:seq-local-001:task-003:$('b' * 64)"
+        pushRequested = $false
+    }
+    Assert-DispatchSequenceMetadata -Dispatch $metadataDispatch
+    $env:JJ_DISPATCHER_TEST_TASK_ID_SEQUENCE = $metadataTaskId
+    $metadataContext = New-AcceptedRunContext -Dispatch $metadataDispatch
+    Remove-Item Env:\JJ_DISPATCHER_TEST_TASK_ID_SEQUENCE -ErrorAction SilentlyContinue
+    Write-DispatchInboxFiles -Dispatch $metadataDispatch -RunContext $metadataContext
+    $metadataTask = Get-Content -LiteralPath $metadataContext.TaskPath -Raw | ConvertFrom-Json
+    Assert-Equal -Actual $metadataTask.sequenceId -Expected "seq-local-001" -Message "task.json sequenceId did not round-trip."
+    Assert-Equal -Actual $metadataTask.taskIndex -Expected 3 -Message "task.json taskIndex did not round-trip."
+    Assert-Equal -Actual $metadataTask.taskIdentityHash -Expected ("a" * 64) -Message "task.json taskIdentityHash did not round-trip."
+    Assert-Equal -Actual $metadataTask.payloadHash -Expected ("b" * 64) -Message "task.json payloadHash did not round-trip."
+    Assert-Equal -Actual $metadataTask.idempotencyKey -Expected "p4:seq-local-001:task-003:$('b' * 64)" -Message "task.json idempotencyKey did not round-trip."
+    Assert-Equal -Actual $metadataTask.pushRequested -Expected $false -Message "task.json pushRequested did not round-trip."
+    $pushControl = Get-Content -LiteralPath (Join-Path $dispatcherRoot "inbox\codex-task.push.txt") -Raw
+    Assert-Equal -Actual $pushControl.Trim() -Expected "false" -Message "pushRequested=false did not write push opt-out transport."
+    $metadataAccepted = Get-RunResultContract -TaskId $metadataTaskId
+    Assert-Equal -Actual $metadataAccepted.sequenceId -Expected "seq-local-001" -Message "accepted result sequenceId did not round-trip."
+    Assert-Equal -Actual $metadataAccepted.taskIndex -Expected 3 -Message "accepted result taskIndex did not round-trip."
+    Assert-Equal -Actual $metadataAccepted.idempotencyKey -Expected "p4:seq-local-001:task-003:$('b' * 64)" -Message "accepted result idempotencyKey did not round-trip."
+    Assert-Equal -Actual $metadataAccepted.pushRequested -Expected $false -Message "accepted result pushRequested did not round-trip."
+
+    $invalidRejected = $false
+    try {
+        Assert-DispatchSequenceMetadata -Dispatch ([pscustomobject]@{
+            repo = "self"
+            worker = "codex"
+            task = "invalid metadata"
+            commitMessage = "test: invalid metadata"
+            sequenceId = "../escape"
+        })
+    }
+    catch {
+        $invalidRejected = $_.Exception.Message -eq "invalid_sequence_metadata:Malformed sequenceId."
+    }
+    if (-not $invalidRejected) { throw "invalid sequence metadata was not rejected." }
+
+    $invalidHashRejected = $false
+    try {
+        Assert-DispatchSequenceMetadata -Dispatch ([pscustomobject]@{
+            repo = "self"
+            worker = "codex"
+            task = "invalid hash"
+            commitMessage = "test: invalid hash"
+            payloadHash = "A" * 64
+        })
+    }
+    catch {
+        $invalidHashRejected = $_.Exception.Message -eq "invalid_sequence_metadata:Malformed payloadHash."
+    }
+    if (-not $invalidHashRejected) { throw "invalid payloadHash metadata was not rejected." }
+
+    $pushRequestedTrueId = "20260607-010701-pushtrue"
+    $pushRequestedTrueDispatch = [pscustomobject]@{
+        repo = "self"
+        worker = "codex"
+        task = "push requested transport"
+        commitMessage = "test: push requested transport"
+        pushRequested = $true
+    }
+    $env:JJ_DISPATCHER_TEST_TASK_ID_SEQUENCE = $pushRequestedTrueId
+    $pushRequestedTrueContext = New-AcceptedRunContext -Dispatch $pushRequestedTrueDispatch
+    Remove-Item Env:\JJ_DISPATCHER_TEST_TASK_ID_SEQUENCE -ErrorAction SilentlyContinue
+    Write-DispatchInboxFiles -Dispatch $pushRequestedTrueDispatch -RunContext $pushRequestedTrueContext
+    $pushControlTrue = Get-Content -LiteralPath (Join-Path $dispatcherRoot "inbox\codex-task.push.txt") -Raw
+    Assert-Equal -Actual $pushControlTrue.Trim() -Expected "true" -Message "pushRequested=true did not write push request transport."
+
     $missingSafe = $false
     try {
         Get-RunResultContract -TaskId "20260607-999999-missing" | Out-Null
@@ -219,6 +303,9 @@ try {
         restartReloadTaskId = $restartReload.taskId
         acceptedReloadTaskId = $acceptedReload.taskId
         duplicateRegeneratedTaskId = $acceptedContext.TaskId
+        metadataTaskId = $metadataAccepted.taskId
+        metadataSequenceId = $metadataAccepted.sequenceId
+        metadataPushRequested = $metadataAccepted.pushRequested
         oldRunDeliveryStatus = $old.deliveryStatus
         tempRepoIgnored = $tempNewer
         runningRunIgnored = $mainRunning
