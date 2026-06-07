@@ -3,6 +3,7 @@ dispatcher/logs/*.tmp
 dispatcher/logs/*.stdout.tmp
 dispatcher/logs/*.stderr.tmp
 dispatcher/runs/
+dispatcher/sequences/
 dispatcher/config.local.json
 dispatcher/inbox/codex-task.txt
 dispatcher/inbox/codex-task.repo.txt
