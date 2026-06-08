@@ -3,6 +3,7 @@ param(
     [int]$PollSeconds = 2,
     [int]$StallSeconds = 120,
     [switch]$Once,
+    [switch]$WaitForNext,
     [int]$MaxIterations = 0
 )
 
@@ -26,6 +27,18 @@ function Resolve-NewestRun {
     }
 
     return @($runs | Sort-Object -Property Name, LastWriteTimeUtc -Descending)[0]
+}
+
+function Get-DispatcherRuns {
+    param([string]$Root)
+
+    if (-not (Test-Path -LiteralPath $Root -PathType Container)) {
+        return @()
+    }
+
+    return @(Get-ChildItem -LiteralPath $Root -Directory | Where-Object {
+        $_.Name -match '^[0-9]{8}-[0-9]{6}-.+'
+    } | Sort-Object -Property Name, LastWriteTimeUtc -Descending)
 }
 
 function Get-RunSnapshot {
@@ -88,9 +101,12 @@ function Get-RunSnapshot {
             summary = Test-Path -LiteralPath $summaryPath -PathType Leaf
         }
         Paths = [ordered]@{
+            task = $taskPath
             stdout = $stdoutPath
             stderr = $stderrPath
             result = $resultPath
+            diff = $diffPath
+            summary = $summaryPath
         }
     }
 }
@@ -171,31 +187,64 @@ function Test-TerminalRunSnapshot {
     return $Snapshot.Artifacts.result -and ($script:TerminalExecutionStates -contains $Snapshot.ExecutionStatus)
 }
 
+function Wait-ForNextRun {
+    param(
+        [string]$Root,
+        [int]$Poll,
+        [int]$IterationLimit = 0
+    )
+
+    $baseline = $null
+    $runs = @(Get-DispatcherRuns -Root $Root)
+    if ($runs.Count -gt 0) {
+        $baseline = $runs[0]
+    }
+
+    $iterations = 0
+    while ($true) {
+        $iterations++
+
+        $runs = @(Get-DispatcherRuns -Root $Root)
+        if ($runs.Count -gt 0) {
+            $newest = $runs[0]
+            if ($null -eq $baseline -or ($newest.Name -ne $baseline.Name -and $newest.Name -gt $baseline.Name)) {
+                return $newest
+            }
+        }
+
+        if ($IterationLimit -gt 0 -and $iterations -ge $IterationLimit) {
+            return $null
+        }
+
+        Start-Sleep -Seconds $Poll
+    }
+}
+
 function Write-RunHeader {
     param([pscustomobject]$Snapshot)
 
-    Write-Host "taskId: $($Snapshot.TaskId)"
-    Write-Host "runDir: $($Snapshot.RunDir)"
-    Write-Host ("elapsed: {0:hh\:mm\:ss}" -f $Snapshot.Elapsed)
-    Write-Host "executionStatus: $($Snapshot.ExecutionStatus)"
-    Write-Host "artifacts: task=$($Snapshot.Artifacts.task) result=$($Snapshot.Artifacts.result) stdout=$($Snapshot.Artifacts.stdout) stderr=$($Snapshot.Artifacts.stderr) diff=$($Snapshot.Artifacts.diff) summary=$($Snapshot.Artifacts.summary)"
-    Write-Host "stdout: $($Snapshot.Paths.stdout)"
-    Write-Host "stderr: $($Snapshot.Paths.stderr)"
+    Write-Output "taskId: $($Snapshot.TaskId)"
+    Write-Output "runDir: $($Snapshot.RunDir)"
+    Write-Output ("elapsed: {0:hh\:mm\:ss}" -f $Snapshot.Elapsed)
+    Write-Output "executionStatus: $($Snapshot.ExecutionStatus)"
+    Write-Output "artifacts: task=$($Snapshot.Artifacts.task) result=$($Snapshot.Artifacts.result) stdout=$($Snapshot.Artifacts.stdout) stderr=$($Snapshot.Artifacts.stderr) diff=$($Snapshot.Artifacts.diff) summary=$($Snapshot.Artifacts.summary)"
+    Write-Output "task: $($Snapshot.Paths.task)"
+    Write-Output "result: $($Snapshot.Paths.result)"
+    Write-Output "stdout: $($Snapshot.Paths.stdout)"
+    Write-Output "stderr: $($Snapshot.Paths.stderr)"
+    Write-Output "diff: $($Snapshot.Paths.diff)"
+    Write-Output "summary: $($Snapshot.Paths.summary)"
 }
 
-function Watch-CurrentTask {
+function Watch-Run {
     param(
-        [string]$Root,
+        [System.IO.DirectoryInfo]$Run,
         [int]$Poll,
         [int]$Stall,
         [switch]$SinglePass,
         [int]$IterationLimit = 0
     )
 
-    if ($Poll -lt 1) { throw "PollSeconds must be at least 1." }
-    if ($Stall -lt 1) { throw "StallSeconds must be at least 1." }
-
-    $run = Resolve-NewestRun -Root $Root
     $snapshot = Get-RunSnapshot -Run $run
     Write-RunHeader -Snapshot $snapshot
 
@@ -210,11 +259,11 @@ function Watch-CurrentTask {
         $changed = $false
 
         foreach ($line in (Read-NewLogLines -State $stdoutState -Prefix "[stdout]")) {
-            Write-Host $line
+            Write-Output $line
             $changed = $true
         }
         foreach ($line in (Read-NewLogLines -State $stderrState -Prefix "[stderr]")) {
-            Write-Host $line
+            Write-Output $line
             $changed = $true
         }
 
@@ -225,13 +274,13 @@ function Watch-CurrentTask {
 
         $snapshot = Get-RunSnapshot -Run $run
         if (Test-TerminalRunSnapshot -Snapshot $snapshot) {
-            Write-Host "terminal: result.json present with executionStatus=$($snapshot.ExecutionStatus)"
+            Write-Output "terminal: result.json present with executionStatus=$($snapshot.ExecutionStatus)"
             return
         }
 
         $quietFor = ((Get-Date) - $lastChangeAt).TotalSeconds
         if (-not $stallReported -and $quietFor -ge $Stall) {
-            Write-Host ("STALLED: no stdout/stderr changes for {0:N0}s; still watching read-only." -f $quietFor)
+            Write-Output ("STALLED: no stdout/stderr changes for {0:N0}s; still watching read-only." -f $quietFor)
             $stallReported = $true
         }
 
@@ -243,9 +292,43 @@ function Watch-CurrentTask {
     }
 }
 
+function Watch-CurrentTask {
+    param(
+        [string]$Root,
+        [int]$Poll,
+        [int]$Stall,
+        [switch]$SinglePass,
+        [switch]$Wait,
+        [int]$IterationLimit = 0
+    )
+
+    if ($Poll -lt 1) { throw "PollSeconds must be at least 1." }
+    if ($Stall -lt 1) { throw "StallSeconds must be at least 1." }
+
+    if (-not $Wait) {
+        $run = Resolve-NewestRun -Root $Root
+        $snapshot = Get-RunSnapshot -Run $run
+        if (Test-TerminalRunSnapshot -Snapshot $snapshot) {
+            Write-RunHeader -Snapshot $snapshot
+            Write-Output "terminal: result.json present with executionStatus=$($snapshot.ExecutionStatus)"
+            return
+        }
+        Watch-Run -Run $run -Poll $Poll -Stall $Stall -SinglePass:$SinglePass -IterationLimit $IterationLimit
+        return
+    }
+
+    Write-Output "waiting: watching for next Dispatcher run under $Root"
+    $run = Wait-ForNextRun -Root $Root -Poll $Poll -IterationLimit $IterationLimit
+    if ($null -eq $run) {
+        return
+    }
+
+    Watch-Run -Run $run -Poll $Poll -Stall $Stall -SinglePass:$false
+}
+
 if ($MyInvocation.InvocationName -ne ".") {
     try {
-        Watch-CurrentTask -Root $RunsRoot -Poll $PollSeconds -Stall $StallSeconds -SinglePass:$Once -IterationLimit $MaxIterations
+        Watch-CurrentTask -Root $RunsRoot -Poll $PollSeconds -Stall $StallSeconds -SinglePass:$Once -Wait:$WaitForNext -IterationLimit $MaxIterations
     }
     catch [System.Management.Automation.PipelineStoppedException] {
         exit 130

@@ -109,6 +109,24 @@ Manual local helper scripts remain available:
 .\scripts\watch-current-task.ps1 -StallSeconds 180
 ```
 
+Inspect the newest Dispatcher run once. If it is already terminal, the watcher prints the run metadata and exits immediately:
+
+```powershell
+.\scripts\watch-current-task.ps1
+```
+
+Wait for the next active Dispatcher run, attach once, tail newly appended Codex stdout/stderr, and exit when that run reaches a terminal execution state:
+
+```powershell
+.\scripts\watch-current-task.ps1 -WaitForNext
+```
+
+For an operator console that keeps waiting for another run after each completion:
+
+```powershell
+.\scripts\watch-current-task.ps1 -WaitForNext -ContinueWatching
+```
+
 ## Result Recovery
 
 Browser postback is an optional delivery channel. It is useful when the browser is available, but it is not the source of execution truth.

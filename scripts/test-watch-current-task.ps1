@@ -23,6 +23,68 @@ function Assert-Contains {
     }
 }
 
+function Assert-NotContains {
+    param([string]$Text, [string]$Unexpected, [string]$Message)
+    if ($Text.Contains($Unexpected)) {
+        throw "$Message Unexpected '$Unexpected' in:`n$Text"
+    }
+}
+
+function Join-CommandArgs {
+    param([string[]]$CommandArgs)
+
+    return [string](($CommandArgs | ForEach-Object {
+        if ($_ -match '^[A-Za-z0-9_:/\\.\-]+$') {
+            $_
+        }
+        else {
+            "'" + ($_.Replace("'", "''")) + "'"
+        }
+    }) -join " ")
+}
+
+function Start-WatcherRunspace {
+    param([string[]]$CommandArgs)
+
+    $ps = [powershell]::Create()
+    $script = "& " + [string](Join-CommandArgs -CommandArgs @($watcherPath)) + " " + [string](Join-CommandArgs -CommandArgs $CommandArgs)
+    [void]$ps.AddScript($script)
+    $async = $ps.BeginInvoke()
+    return [pscustomobject]@{
+        PowerShell = $ps
+        Async = $async
+    }
+}
+
+function Receive-WatcherRunspace {
+    param(
+        [pscustomobject]$Runspace,
+        [int]$TimeoutSeconds = 20
+    )
+
+    $deadline = (Get-Date).AddSeconds($TimeoutSeconds)
+    while (-not $Runspace.Async.IsCompleted) {
+        if ((Get-Date) -gt $deadline) {
+            $Runspace.PowerShell.Stop()
+            $Runspace.PowerShell.Dispose()
+            throw "Watcher did not exit within $TimeoutSeconds seconds."
+        }
+        Start-Sleep -Milliseconds 100
+    }
+
+    try {
+        $output = $Runspace.PowerShell.EndInvoke($Runspace.Async) | Out-String
+        if ($Runspace.PowerShell.Streams.Error.Count -gt 0) {
+            $errors = $Runspace.PowerShell.Streams.Error | Out-String
+            throw "Watcher runspace wrote errors:`n$errors`nOutput:`n$output"
+        }
+        return $output
+    }
+    finally {
+        $Runspace.PowerShell.Dispose()
+    }
+}
+
 function New-FixtureRun {
     param(
         [string]$TaskId,
@@ -55,6 +117,20 @@ function New-FixtureRun {
     }
 
     return Get-Item -LiteralPath $runDir
+}
+
+function Complete-FixtureRun {
+    param(
+        [System.IO.DirectoryInfo]$Run,
+        [string]$ExecutionStatus = "success"
+    )
+
+    $taskId = $Run.Name
+    Set-Content -LiteralPath (Join-Path $Run.FullName "result.json") -Value (([ordered]@{
+        taskId = $taskId
+        status = $ExecutionStatus
+        executionStatus = $ExecutionStatus
+    }) | ConvertTo-Json -Depth 4) -Encoding UTF8 -NoNewline
 }
 
 function Get-ArtifactHashes {
@@ -121,6 +197,44 @@ try {
     $after = Get-ArtifactHashes -Root $missingRun.FullName
     Assert-HashesUnchanged -Before $before -After $after
     Assert-Contains -Text $readOnlyOutput -Expected "taskId: 20260608-010300-missing" -Message "Read-only run did not inspect expected fixture."
+
+    Remove-Item -LiteralPath $missingRun.FullName -Recurse -Force
+    Complete-FixtureRun -Run $oldRun
+    Complete-FixtureRun -Run $newRun
+    $baselineRun = New-FixtureRun -TaskId "20260608-010400-baseline" -ExecutionStatus "success" -Result
+    $baselineHashes = Get-ArtifactHashes -Root $baselineRun.FullName
+    $waiter = Start-WatcherRunspace -CommandArgs @(
+        "-RunsRoot", $fixtureRunsRoot,
+        "-PollSeconds", "1",
+        "-StallSeconds", "10",
+        "-WaitForNext"
+    )
+    Start-Sleep -Milliseconds 1500
+    $waitRun = New-FixtureRun -TaskId "20260608-010500-waited"
+    $waitRunInitialHashes = Get-ArtifactHashes -Root $waitRun.FullName
+    Start-Sleep -Milliseconds 2000
+    Add-Content -LiteralPath (Join-Path $waitRun.FullName "codex-output.log") -Value "fresh stdout" -Encoding UTF8
+    Add-Content -LiteralPath (Join-Path $waitRun.FullName "codex-error.log") -Value "fresh stderr" -Encoding UTF8
+    Start-Sleep -Milliseconds 1200
+    Complete-FixtureRun -Run $waitRun
+    $waitOutput = Receive-WatcherRunspace -Runspace $waiter
+    $baselineAfterHashes = Get-ArtifactHashes -Root $baselineRun.FullName
+    $waitRunAfterHashes = Get-ArtifactHashes -Root $waitRun.FullName
+    Assert-HashesUnchanged -Before $baselineHashes -After $baselineAfterHashes
+    Assert-Equal -Actual $waitRunAfterHashes["task.json"] -Expected $waitRunInitialHashes["task.json"] -Message "Wait mode changed the new run task artifact."
+    Assert-Equal -Actual $waitRunAfterHashes["git-diff.patch"] -Expected $waitRunInitialHashes["git-diff.patch"] -Message "Wait mode changed the new run diff artifact."
+    Assert-Contains -Text $waitOutput -Expected "waiting: watching for next Dispatcher run under" -Message "Wait mode did not report waiting state."
+    Assert-NotContains -Text $waitOutput -Unexpected "taskId: $($baselineRun.Name)" -Message "Wait mode attached to already-completed baseline run."
+    Assert-Contains -Text $waitOutput -Expected "taskId: $($waitRun.Name)" -Message "Wait mode did not attach to newly created run."
+    Assert-Contains -Text $waitOutput -Expected "[stdout] fresh stdout" -Message "Wait mode did not tail appended stdout."
+    Assert-Contains -Text $waitOutput -Expected "[stderr] fresh stderr" -Message "Wait mode did not tail appended stderr."
+    Assert-Contains -Text $waitOutput -Expected "terminal: result.json present with executionStatus=success" -Message "Wait mode did not exit on terminal result."
+    Assert-Equal -Actual ([regex]::Matches($waitOutput, "taskId: $([regex]::Escape($waitRun.Name))").Count) -Expected 1 -Message "Wait mode should attach exactly once to the new run."
+
+    $readOnlyWaitOutput = & $watcherPath -RunsRoot $fixtureRunsRoot -PollSeconds 1 -StallSeconds 10 -WaitForNext -MaxIterations 1 *>&1 | Out-String
+    $afterReadOnlyWaitHashes = Get-ArtifactHashes -Root $baselineRun.FullName
+    Assert-HashesUnchanged -Before $baselineAfterHashes -After $afterReadOnlyWaitHashes
+    Assert-Contains -Text $readOnlyWaitOutput -Expected "waiting: watching for next Dispatcher run under" -Message "Wait mode read-only check did not wait for a newer run."
 
     Write-Host "watch-current-task fixture tests passed."
 }
