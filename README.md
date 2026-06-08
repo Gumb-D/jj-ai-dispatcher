@@ -106,6 +106,7 @@ Manual local helper scripts remain available:
 .\scripts\bridge-dispatch.ps1 -Repo self -Worker codex -Task "describe task" -CommitMessage "docs: describe change"
 .\scripts\bridge-wait-latest.ps1
 .\scripts\bridge-latest.ps1
+.\scripts\watch-current-task.ps1 -StallSeconds 180
 ```
 
 ## Result Recovery
